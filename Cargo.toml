@@ -1,0 +1,47 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.90"
+
+[workspace.dependencies]
+qr-proto = { path = "crates/qr-proto" }
+qr-fec = { path = "crates/qr-fec" }
+qr-net = { path = "crates/qr-net" }
+qr-media = { path = "crates/qr-media" }
+anyhow = "1"
+thiserror = "2"
+bytes = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "signal", "process", "fs"] }
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring", "log"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging", "tls12"] }
+rcgen = "0.14"
+socket2 = "0.6"
+spake2 = "0.4"
+hmac = "0.12"
+sha2 = "0.10"
+rand = "0.8"
+data-encoding = "2"
+mdns-sd = "0.21"
+reed-solomon-erasure = { version = "6", features = ["simd-accel"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+gstreamer = "0.25"
+gstreamer-app = "0.25"
+gstreamer-video = "0.25"
+gstreamer-allocators = "0.25"
+libc = "0.2"
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
+
+[profile.dev.package."*"]
+opt-level = 2

@@ -1,0 +1,12 @@
+[package]
+name = "qr-fec"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+qr-proto.workspace = true
+reed-solomon-erasure.workspace = true
+
+[dev-dependencies]
+rand.workspace = true

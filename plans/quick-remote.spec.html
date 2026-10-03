@@ -1,0 +1,388 @@
+<title>QuickRemote Spec</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column (~72ch) with wide tables and the diagram allowed to scroll; section heads carry a mono section tag. */
+:root {
+  --bg: #f5f7f9;
+  --surface: #ffffff;
+  --fg: #151a21;
+  --muted: #5a6573;
+  --line: #d9dfe6;
+  --accent: #1f5bc4;
+  --accent-soft: #e5edfb;
+  --signal: #b8560f;
+  --signal-soft: #fbeee3;
+  --font-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --font-body: "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1318; --surface: #161c23; --fg: #e4e9ef; --muted: #96a2b0; --line: #2a333d;
+    --accent: #7ba7f5; --accent-soft: #1a2840; --signal: #f0a060; --signal-soft: #33241a; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1318; --surface: #161c23; --fg: #e4e9ef; --muted: #96a2b0; --line: #2a333d;
+  --accent: #7ba7f5; --accent-soft: #1a2840; --signal: #f0a060; --signal-soft: #33241a; color-scheme: dark;
+}
+body { background: var(--bg); color: var(--fg); font: 16px/1.6 var(--font-body); }
+.wrap { max-width: 860px; margin: 0 auto; padding-inline: 20px; padding-block: 40px 80px; }
+header { display: grid; gap: 8px; padding-bottom: 24px; border-bottom: 1px solid var(--line); }
+.eyebrow { font: 500 12px/1 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+h1 { font: 700 clamp(30px, 5vw, 42px)/1.1 var(--font-display); margin: 0; text-wrap: balance; letter-spacing: -.01em; }
+h2 { font: 700 22px/1.25 var(--font-display); margin: 0; text-wrap: balance; display: flex; gap: 12px; align-items: baseline; }
+h2 .tag { font: 500 12px/1 var(--font-mono); color: var(--accent); letter-spacing: .04em; }
+h3 { font: 600 16px/1.3 var(--font-body); margin: 8px 0 0; }
+section { display: grid; gap: 14px; padding-block: 32px 8px; }
+p, ul, ol { margin: 0; max-width: 70ch; }
+ul, ol { padding-left: 1.2em; display: grid; gap: 4px; }
+code, .mono { font-family: var(--font-mono); font-size: .88em; }
+.meta { display: flex; flex-wrap: wrap; gap: 6px 20px; color: var(--muted); font-size: 14px; }
+.lede { font-size: 18px; max-width: 64ch; }
+.scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; vertical-align: top; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+th { font: 600 12px/1.3 var(--font-mono); text-transform: uppercase; letter-spacing: .05em; color: var(--muted); background: var(--bg); }
+tr:last-child td { border-bottom: 0; }
+td.id { font-family: var(--font-mono); font-weight: 500; color: var(--accent); white-space: nowrap; }
+td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pill { display: inline-block; font: 500 11px/1 var(--font-mono); padding: 4px 6px; border-radius: 4px; white-space: nowrap; }
+.pill.user { background: var(--accent-soft); color: var(--accent); }
+.pill.mine { background: var(--signal-soft); color: var(--signal); }
+.pill.gate { background: var(--signal-soft); color: var(--signal); }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+.cols > div { min-width: 0; display: grid; gap: 8px; align-content: start; }
+.phase-row td:first-child { font-family: var(--font-mono); white-space: nowrap; }
+figure { margin: 0; display: grid; gap: 8px; }
+figure .scroll { padding: 12px; }
+figure svg { display: block; width: 100%; min-width: 760px; height: auto; color: var(--fg); }
+figcaption { color: var(--muted); font-size: 14px; max-width: 70ch; }
+.mock { font: 13px/1.45 var(--font-mono); white-space: pre; padding: 14px 16px; margin: 0; background: var(--surface); }
+.note { border-left: 3px solid var(--signal); padding: 8px 14px; background: var(--signal-soft); border-radius: 0 6px 6px 0; max-width: 70ch; }
+a { color: var(--accent); }
+a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+
+<div class="wrap">
+<header>
+  <span class="eyebrow">Spec · plans/quick-remote.spec.html</span>
+  <h1>QuickRemote: remote desktop and LAN game streaming</h1>
+  <div class="meta"><span>Project: <code>/works/quick-remote</code></span><span>Plan: <code>plans/quick-remote.md</code></span><span>2026-10-02</span><span>Status: awaiting review</span></div>
+</header>
+
+<section id="summary">
+  <h2><span class="tag">§1</span>Summary</h2>
+  <p class="lede">QuickRemote is a new, clean-room remote desktop app with its own protocol. On a LAN it streams at gaming quality (up to 1080p120 or 4K60, about 20 ms end to end) with audio, gamepads and raw mouse input. Over the internet it reaches hosts behind home routers through a self-hosted rendezvous and relay server. Hosts run Linux (virtual or real desktop) and Windows. Clients are a native desktop app, a web page and an Android app.</p>
+</section>
+
+<section id="current">
+  <h2><span class="tag">§2</span>Current state</h2>
+  <ul>
+    <li><code>/works/quick-remote</code> is empty. Nothing is reused from <code>/works/quicdesk</code>. That project serves as a reference only; its lessons (one frame per QUIC stream, nothing encoded that can't be sent, frame rate drops before quality) inform the design.</li>
+    <li>Build and test machine: Debian 13, Intel i5-9500 (6 cores), 15 GB RAM, Intel UHD 630 with VA-API. The GPU encodes H.264 and HEVC in hardware but not AV1. GStreamer VA-API, Rust, Node 24 and gcc are installed.</li>
+    <li>The machine is headless. It has no physical desktop session, no second LAN machine, no Windows PC, no discrete GPU and no Android device. You'll provide hardware later, and every phase that needs it has a hardware gate.</li>
+  </ul>
+</section>
+
+<section id="decisions">
+  <h2><span class="tag">§3</span>Decisions</h2>
+  <p><span class="pill user">answered</span> rows are your answers from the question round. <span class="pill mine">design</span> rows are engineering choices made inside those answers. Flag any you disagree with.</p>
+  <div class="scroll"><table>
+    <thead><tr><th>Question</th><th>Decision</th><th>Reason</th></tr></thead>
+    <tbody>
+      <tr><td>Where to build</td><td><span class="pill user">answered</span> New project in <code>/works/quick-remote</code>, clean room</td><td>Designed for gaming from day one; QuicDesk is reference only.</td></tr>
+      <tr><td>Host platforms</td><td><span class="pill user">answered</span> Linux virtual display, Linux real desktop (X11 and Wayland), Windows</td><td>Covers headless servers, everyday Linux desktops and Windows gaming PCs.</td></tr>
+      <tr><td>Clients</td><td><span class="pill user">answered</span> Native desktop app, web browser, Android</td><td>Native for lowest latency, web for no install, Android for phones and TVs.</td></tr>
+      <tr><td>Internet reach</td><td><span class="pill user">answered</span> UDP hole punching with relay fallback through a rendezvous server</td><td>Works behind home routers without port forwarding.</td></tr>
+      <tr><td>Relay deployment</td><td><span class="pill user">answered</span> Self-host anywhere: a single binary and a Docker image</td><td>The deploy target can be chosen later; QA runs it locally.</td></tr>
+      <tr><td>Features</td><td><span class="pill user">answered</span> Audio, gamepad, pointer lock and raw mouse, high fps, 4:4:4 sharp text</td><td>LAN gaming plus desktop work.</td></tr>
+      <tr><td>Extras</td><td><span class="pill user">answered</span> Clipboard, multi-monitor, pen pressure, file transfer, microphone</td><td>Full remote-desktop feature set.</td></tr>
+      <tr><td>Meaning of "3D"</td><td><span class="pill user">answered</span> GPU-accelerated host (zero-copy capture to encode) and 3D/CAD work quality</td><td>Stereo and VR are out of scope.</td></tr>
+      <tr><td>LAN target</td><td><span class="pill user">answered</span> 1080p60 at ≤ 20 ms; 1080p120 and 4K60 at 50–150 Mbps on capable hardware</td><td>Comparable to Moonlight and Parsec.</td></tr>
+      <tr><td>Auth and discovery</td><td><span class="pill user">answered</span> PIN pairing that leaves remembered device keys, plus mDNS LAN discovery. No accounts.</td><td>No user database; LAN hosts appear automatically.</td></tr>
+      <tr><td>Host mode</td><td><span class="pill user">answered</span> User app first; an optional system service in a later phase (login screen, lock screen, UAC, autostart)</td><td>The simple path ships first.</td></tr>
+      <tr><td>Phasing</td><td><span class="pill user">answered</span> LAN core, then internet, then web, then Windows host, then Android</td><td>Each phase ships something usable.</td></tr>
+      <tr><td>Phase 1 capture</td><td><span class="pill user">answered</span> Virtual display first; real desktop is the second milestone of Phase 1</td><td>Fully testable on this headless machine.</td></tr>
+      <tr><td>Stack</td><td><span class="pill user">answered</span> Rust core for host, native client, relay and protocol. TypeScript web client. Android is a Kotlin UI over the Rust core through JNI.</td><td>One protocol implementation; memory safe.</td></tr>
+      <tr><td>Test hardware</td><td><span class="pill user">answered</span> Only this machine for now; hardware arrives later and each dependent phase has a gate</td><td>Claims stay honest about what was measured where.</td></tr>
+      <tr><td>Plan depth</td><td><span class="pill user">answered</span> Task-level detail for all five phases</td><td>Requested.</td></tr>
+      <tr><td>Transport</td><td><span class="pill mine">design</span> One QUIC connection per session. Video and audio go in unreliable datagrams with forward error correction; control, clipboard and files go on reliable streams.</td><td>Datagrams avoid retransmit stalls in games; browsers speak the same thing through WebTransport.</td></tr>
+      <tr><td>Two profiles</td><td><span class="pill mine">design</span> LAN profile (high fixed bitrate, low FEC, no pacing delay) and internet profile (delay-based adaptive rate, stronger FEC). Chosen from measured RTT and path type, and can be overridden.</td><td>The two links need opposite trade-offs.</td></tr>
+      <tr><td>Codecs</td><td><span class="pill mine">design</span> AV1, then HEVC, then H.264, whichever both sides decode in hardware. Software encode is the floor. 4:4:4 where the encoder supports it.</td><td>Best quality per bit where it exists, and it always works.</td></tr>
+      <tr><td>Concurrent clients</td><td><span class="pill mine">design</span> One controlling client per host in v1</td><td>Keeps input ownership and per-client encoding simple; see Out of scope.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="scope">
+  <h2><span class="tag">§4</span>Scope</h2>
+  <div class="cols">
+    <div><h3>In</h3><ul>
+      <li>Wire protocol, its specification document and a conformance test suite</li>
+      <li>Linux host: virtual GPU display, X11 desktop, Wayland desktop through the screencast portal</li>
+      <li>Windows host (Windows 10 21H2+ and Windows 11)</li>
+      <li>Native client for Linux and Windows</li>
+      <li>Web client for desktop Chrome, Edge and Firefox</li>
+      <li>Android client for Android 10+ phones, tablets and TVs</li>
+      <li>Rendezvous and relay server</li>
+      <li>Video, audio, microphone, keyboard, mouse (absolute and relative), gamepad, pen, clipboard, files, multi-monitor</li>
+      <li>Optional host system service: login and lock screen, UAC, autostart</li>
+      <li>Stats overlay and a latency measurement tool</li>
+    </ul></div>
+    <div><h3>Out (non-goals)</h3><ul>
+      <li>Stereo 3D and VR headset streaming</li>
+      <li>User accounts and cloud host lists</li>
+      <li>macOS host and macOS client; iOS client</li>
+      <li>HDR (10-bit PQ) streaming</li>
+      <li>Several clients controlling one host at the same time, and view-only spectators</li>
+      <li>Compatibility with RDP, VNC or Moonlight clients</li>
+      <li>Session recording</li>
+      <li>Bypassing game anti-cheat that blocks virtual input devices</li>
+      <li>App store publishing (Play Store, Microsoft Store)</li>
+    </ul></div>
+  </div>
+</section>
+
+<section id="architecture">
+  <h2><span class="tag">§5</span>Architecture</h2>
+  <figure>
+    <div class="scroll">
+    <svg viewBox="0 0 900 470" role="img" aria-label="A host and a client share one encrypted QUIC session. It runs directly on a LAN, directly over the internet after hole punching, or through the relay, which forwards ciphertext. The rendezvous server only brokers addresses.">
+      <defs>
+        <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
+        <marker id="ara" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker>
+      </defs>
+      <g font-family="Instrument Sans, system-ui, sans-serif" font-size="12" fill="currentColor">
+        <!-- Host -->
+        <rect x="20" y="20" width="270" height="300" rx="8" fill="var(--surface)" stroke="currentColor" stroke-opacity=".5"/>
+        <text x="36" y="44" font-size="14" font-weight="600">Host (Linux / Windows)</text>
+        <rect x="36" y="60" width="238" height="34" rx="4" fill="var(--bg)" stroke="currentColor" stroke-opacity=".3"/>
+        <text x="48" y="82">Capture: virtual display · desktop</text>
+        <rect x="36" y="104" width="238" height="34" rx="4" fill="var(--bg)" stroke="currentColor" stroke-opacity=".3"/>
+        <text x="48" y="126">GPU encode (zero copy) + FEC</text>
+        <rect x="36" y="148" width="238" height="34" rx="4" fill="var(--bg)" stroke="currentColor" stroke-opacity=".3"/>
+        <text x="48" y="170">Audio out / virtual mic</text>
+        <rect x="36" y="192" width="238" height="34" rx="4" fill="var(--bg)" stroke="currentColor" stroke-opacity=".3"/>
+        <text x="48" y="214">Input: keys · mouse · pads · pen</text>
+        <rect x="36" y="236" width="238" height="34" rx="4" fill="var(--bg)" stroke="currentColor" stroke-opacity=".3"/>
+        <text x="48" y="258">Clipboard · files · monitors</text>
+        <text x="36" y="300" fill="var(--muted)">mDNS advertiser · paired-key store</text>
+
+        <!-- Client -->
+        <rect x="610" y="20" width="270" height="300" rx="8" fill="var(--surface)" stroke="currentColor" stroke-opacity=".5"/>
+        <text x="626" y="44" font-size="14" font-weight="600">Client (native / web / Android)</text>
+        <rect x="626" y="60" width="238" height="34" rx="4" fill="var(--bg)" stroke="currentColor" stroke-opacity=".3"/>
+        <text x="638" y="82">FEC recover + hardware decode</text>
+        <rect x="626" y="104" width="238" height="34" rx="4" fill="var(--bg)" stroke="currentColor" stroke-opacity=".3"/>
+        <text x="638" y="126">Present (GPU, low-latency)</text>
+        <rect x="626" y="148" width="238" height="34" rx="4" fill="var(--bg)" stroke="currentColor" stroke-opacity=".3"/>
+        <text x="638" y="170">Audio playout / mic capture</text>
+        <rect x="626" y="192" width="238" height="34" rx="4" fill="var(--bg)" stroke="currentColor" stroke-opacity=".3"/>
+        <text x="638" y="214">Input capture · pointer lock</text>
+        <rect x="626" y="236" width="238" height="34" rx="4" fill="var(--bg)" stroke="currentColor" stroke-opacity=".3"/>
+        <text x="638" y="258">Stats overlay · host list</text>
+        <text x="626" y="300" fill="var(--muted)">mDNS browser · paired-key store</text>
+
+        <!-- Session channels -->
+        <text x="450" y="58" text-anchor="middle" font-weight="600" fill="var(--accent)">One QUIC session (TLS 1.3)</text>
+        <line x1="292" y1="80" x2="606" y2="80" stroke="var(--accent)" stroke-width="2" marker-end="url(#ara)"/>
+        <text x="450" y="74" text-anchor="middle" fill="var(--accent)">datagrams: video + FEC</text>
+        <line x1="292" y1="166" x2="606" y2="166" stroke="var(--accent)" stroke-width="2" marker-start="url(#ara)" marker-end="url(#ara)"/>
+        <text x="450" y="160" text-anchor="middle" fill="var(--accent)">datagrams: audio ⇄ mic</text>
+        <line x1="606" y1="210" x2="292" y2="210" stroke="var(--accent)" stroke-width="2" marker-end="url(#ara)"/>
+        <text x="450" y="204" text-anchor="middle" fill="var(--accent)">datagrams: motion + streams: input state</text>
+        <line x1="292" y1="254" x2="606" y2="254" stroke="var(--accent)" stroke-width="2" stroke-dasharray="6 4" marker-start="url(#ara)" marker-end="url(#ara)"/>
+        <text x="450" y="248" text-anchor="middle" fill="var(--accent)">streams: control · clipboard · files</text>
+
+        <!-- Paths -->
+        <rect x="330" y="350" width="240" height="96" rx="8" fill="var(--surface)" stroke="currentColor" stroke-opacity=".5"/>
+        <text x="450" y="374" text-anchor="middle" font-size="14" font-weight="600">Rendezvous + relay (self-hosted)</text>
+        <text x="450" y="396" text-anchor="middle" fill="var(--muted)">host ID → public addresses</text>
+        <text x="450" y="414" text-anchor="middle" fill="var(--muted)">hole-punch timing</text>
+        <text x="450" y="432" text-anchor="middle" fill="var(--muted)">relay: forwards ciphertext only</text>
+        <line x1="155" y1="322" x2="326" y2="384" stroke="currentColor" marker-end="url(#ar)"/>
+        <text x="200" y="368" fill="var(--muted)">registers ID</text>
+        <line x1="745" y1="322" x2="574" y2="384" stroke="currentColor" marker-end="url(#ar)"/>
+        <text x="640" y="368" fill="var(--muted)">looks up ID</text>
+        <text x="450" y="300" text-anchor="middle" fill="var(--muted)">path: LAN direct · internet direct · relayed</text>
+      </g>
+    </svg>
+    </div>
+    <figcaption>Every part of QuickRemote is new. Host and client share one encrypted QUIC session that carries latency-critical media as unreliable datagrams and everything that must arrive as reliable streams. On a LAN, mDNS finds the host. Over the internet, the rendezvous server brokers the hole punch; when that fails, the same session runs through the relay, which never sees plaintext.</figcaption>
+  </figure>
+</section>
+
+<section id="requirements">
+  <h2><span class="tag">§6</span>Requirements</h2>
+  <h3>Connection and security</h3>
+  <div class="scroll"><table><tbody>
+    <tr><td class="id">R1</td><td>A running host advertises itself on the LAN, and a client on the same subnet lists it within 3 s without the user typing an address.</td></tr>
+    <tr><td class="id">R2</td><td>The first connection between a client and a host requires a 6-digit PIN shown on the host. After pairing, each side stores the other's public key, and later connections need no PIN. A client that isn't paired and doesn't present the PIN is refused.</td></tr>
+    <tr><td class="id">R3</td><td>All session traffic is encrypted end to end with TLS 1.3 and authenticated by the paired keys, including when it passes through the relay. The relay cannot read or alter it.</td></tr>
+    <tr><td class="id">R4</td><td>Over the internet, a client reaches a paired host by its host ID through the rendezvous server, with no port forwarding. The path is direct when hole punching succeeds and relayed otherwise, and the client shows which one is in use.</td></tr>
+    <tr><td class="id">R5</td><td>The rendezvous and relay server ships as one binary and one Docker image. Hosts and clients work fully on a LAN without it.</td></tr>
+    <tr><td class="id">R6</td><td>A dropped session reconnects automatically within 5 s of the network coming back, without a new PIN, and on reconnect all held keys and buttons are released on the host.</td></tr>
+  </tbody></table></div>
+
+  <h3>Video and 3D</h3>
+  <div class="scroll"><table><tbody>
+    <tr><td class="id">R7</td><td>The host picks the most efficient codec both sides decode, ranked AV1, then HEVC, then H.264. It uses a hardware encoder when one opens and a software encoder otherwise. The chosen codec and encoder are shown in the stats overlay.</td></tr>
+    <tr><td class="id">R8</td><td>LAN profile: at 1080p60, the time from host capture to client present is ≤ 20 ms at p95 and ≤ 12 ms at the median. On hardware whose encoder supports it, 1080p120 and 4K60 run at full frame rate within the same budget.</td></tr>
+    <tr><td class="id">R9</td><td>Internet profile: on a 10 Mbps link with 50 ms RTT and 1% random loss, the stream never freezes for more than 500 ms and settles to a stable rate within 5 s. When the link shrinks, frame rate drops before per-frame quality, and the stream recovers when the link grows.</td></tr>
+    <tr><td class="id">R10</td><td>Forward error correction repairs random packet loss up to 5% (LAN) or 10% (internet) without retransmission or a new keyframe. When a frame can't be repaired, the host restores a clean picture within one RTT plus one frame.</td></tr>
+    <tr><td class="id">R11</td><td>Sharp-text mode (toggle in the client) sends 4:4:4 chroma when the encoder supports it. Otherwise, 300 ms after the screen goes still, it sends one high-quality refresh frame.</td></tr>
+    <tr><td class="id">R12</td><td>On GPU backends, frames travel from capture to the encoder without a copy through system memory. A GPU-rendered 3D app running at 60 fps on the host streams at 60 fps.</td></tr>
+    <tr><td class="id">R13</td><td>Virtual display: the host can start a headless GPU-accelerated display at the resolution and refresh rate the client asks for (up to 3840×2160 at 120 Hz) and run a desktop session or a single app or game in it.</td></tr>
+    <tr><td class="id">R14</td><td>Real desktop: the host captures an existing Linux X11 session, a Linux Wayland session through the screencast portal (asking permission once, then remembering it), and the Windows desktop.</td></tr>
+    <tr><td class="id">R15</td><td>Multi-monitor: the client lists the host's monitors and streams the chosen one, can switch monitors during a session, and can open a second window streaming another monitor.</td></tr>
+    <tr><td class="id">R16</td><td>When the client window is resized, the virtual display follows it. For a real desktop, the client scales the picture to fit with the aspect ratio kept.</td></tr>
+  </tbody></table></div>
+
+  <h3>Audio</h3>
+  <div class="scroll"><table><tbody>
+    <tr><td class="id">R17</td><td>Host audio (stereo, 48 kHz, Opus) plays on the client with ≤ 40 ms of added latency on a LAN, and audio and video stay within ±40 ms of each other.</td></tr>
+    <tr><td class="id">R18</td><td>The client's microphone, when the user turns it on, appears on the host as a microphone input that host apps can record from. It is off by default.</td></tr>
+  </tbody></table></div>
+
+  <h3>Input</h3>
+  <div class="scroll"><table><tbody>
+    <tr><td class="id">R19</td><td>Keys are sent by physical position, so games and shortcuts work whatever the keyboard layouts on either side. A separate text mode types committed characters for phone keyboards and IMEs.</td></tr>
+    <tr><td class="id">R20</td><td>Mouse has two modes. Absolute is for desktop work. Relative is for games: the pointer is locked, raw deltas are sent, and the client adds no acceleration. A hotkey switches modes, and the host's request to capture the pointer switches automatically.</td></tr>
+    <tr><td class="id">R21</td><td>Up to 4 client gamepads appear on the host as virtual Xbox-style controllers with all buttons, sticks and triggers. Rumble returns to the client. Plugging and unplugging is reflected during a session.</td></tr>
+    <tr><td class="id">R22</td><td>Pen input from a client tablet arrives on the host as a pen with pressure (at the client device's full resolution), tilt and an eraser.</td></tr>
+    <tr><td class="id">R23</td><td>Input reaches the host within 2 ms of the client receiving it, plus one-way network time. Losing a packet never leaves a key or button stuck.</td></tr>
+  </tbody></table></div>
+
+  <h3>Desktop features</h3>
+  <div class="scroll"><table><tbody>
+    <tr><td class="id">R24</td><td>Clipboard text and images (PNG, up to 16 MB) sync both ways. It is on by default and can be switched off per host.</td></tr>
+    <tr><td class="id">R25</td><td>Files move both ways: by drag and drop in the native client and through a file picker in the web and Android clients. Transfers show progress, can be cancelled, are checked against a hash on arrival, and never block video or input.</td></tr>
+  </tbody></table></div>
+
+  <h3>Clients</h3>
+  <div class="scroll"><table><tbody>
+    <tr><td class="id">R26</td><td>The native client runs on Linux and Windows. It shows the host list (discovered, paired, by ID), runs sessions in a window or fullscreen, and decodes in hardware with a software fallback.</td></tr>
+    <tr><td class="id">R27</td><td>The web client is served by the host. It runs in desktop Chrome, Edge and Firefox over WebTransport with WebCodecs, and supports video, audio, keyboard, mouse with pointer lock, gamepads, clipboard and file upload and download.</td></tr>
+    <tr><td class="id">R28</td><td>The Android client runs on Android 10+. It decodes in hardware, supports touch as mouse (trackpad and direct modes), the on-screen keyboard, Bluetooth and USB controllers, a hardware mouse and keyboard, and pen input, and works with a TV remote on Android TV.</td></tr>
+    <tr><td class="id">R29</td><td>Every client has a stats overlay toggled by a hotkey. It shows fps, bitrate, codec, path (LAN, direct or relay), packet loss, FEC repairs and latency split into capture, encode, network, decode and present.</td></tr>
+  </tbody></table></div>
+
+  <h3>Hosts and operations</h3>
+  <div class="scroll"><table><tbody>
+    <tr><td class="id">R30</td><td>The Windows host captures through Windows Graphics Capture (with DXGI duplication as a fallback), encodes on NVENC, AMF or Quick Sync, injects input with virtual gamepad and pen devices, and captures audio by WASAPI loopback.</td></tr>
+    <tr><td class="id">R31</td><td>The host runs as an app in the logged-in user's session. The optional system service also reaches the login and lock screens (and UAC prompts on Windows) and starts at boot.</td></tr>
+    <tr><td class="id">R32</td><td>The protocol has a written specification with a version number. A conformance suite checks the Rust core and the web client against it, and peers with different major versions refuse each other with a clear message.</td></tr>
+  </tbody></table></div>
+</section>
+
+<section id="behavior">
+  <h2><span class="tag">§7</span>Behavior and UX</h2>
+  <h3>Flows</h3>
+  <ol>
+    <li><strong>First pairing (LAN).</strong> Start the host, which shows its name and a 6-digit PIN. Open the client and the host appears under "On this network". Choose it, enter the PIN, and the session starts. The host is now listed under "Paired".</li>
+    <li><strong>Internet.</strong> On the host, turn on internet access and enter the rendezvous server address; the host shows its host ID. On a paired client, add the host by ID once, or have it filled in automatically when pairing happened on the LAN. Connecting shows "Direct" or "Relayed".</li>
+    <li><strong>Game session.</strong> Click into the stream. The first click in a game that hides its cursor locks the pointer, and the hotkey releases it. Gamepads connected to the client show up on the host immediately.</li>
+    <li><strong>Leaving.</strong> The hotkey or the window close button ends the session. The host releases every held input and, for a virtual display, keeps running or stops according to the host setting.</li>
+  </ol>
+  <h3>Client hotkeys (Ctrl+Alt+Shift plus a key)</h3>
+  <div class="scroll"><table>
+    <thead><tr><th>Key</th><th>Action</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">M</td><td>Switch between absolute and relative (locked) mouse</td></tr>
+      <tr><td class="mono">S</td><td>Show or hide the stats overlay</td></tr>
+      <tr><td class="mono">T</td><td>Turn sharp-text mode on or off</td></tr>
+      <tr><td class="mono">D</td><td>Next monitor</td></tr>
+      <tr><td class="mono">F</td><td>Fullscreen on or off</td></tr>
+      <tr><td class="mono">Q</td><td>Disconnect</td></tr>
+    </tbody>
+  </table></div>
+  <h3>States and errors</h3>
+  <ul>
+    <li><strong>Connecting → Direct / Relayed / LAN → Reconnecting → Ended.</strong> The current state is always shown in the title bar and the overlay.</li>
+    <li><strong>Wrong PIN:</strong> "That PIN doesn't match. Check the code on the host and try again." After 5 wrong attempts a minute, the host ignores that client for 60 s.</li>
+    <li><strong>Host unreachable by ID:</strong> "The host isn't online on the rendezvous server. Check that the host is running and has internet access turned on."</li>
+    <li><strong>No common codec:</strong> the error names the codecs each side has.</li>
+    <li><strong>Wayland permission refused:</strong> the host says capture needs the screen-sharing permission and offers to ask again.</li>
+    <li><strong>Version mismatch:</strong> "This host runs protocol vX; update the client (or the host)."</li>
+  </ul>
+  <h3>Native client layout</h3>
+  <div class="scroll"><pre class="mock">┌ QuickRemote ───────────────────────────────────────────────┐
+│ On this network                                            │
+│   ● studio-pc       Linux · virtual display   [Connect]    │
+│   ● gaming-rig      Windows 11 · RTX 4070     [Pair…]      │
+│ Paired                                                     │
+│   ○ office-box      by ID  qr-7f3a-91c2       [Connect]    │
+│                                       [+ Add host by ID]   │
+└────────────────────────────────────────────────────────────┘
+
+┌ gaming-rig — LAN ──────────────────────────────────────────┐
+│ ┌stats──────────────────────────┐                          │
+│ │ 1920×1080 · 120 fps · HEVC    │                          │
+│ │ 62 Mbps · loss 0.1% · FEC 3   │     (remote picture)     │
+│ │ cap 1.2 enc 3.1 net 0.6       │                          │
+│ │ dec 1.9 pres 4.0 = 10.8 ms    │                          │
+│ └───────────────────────────────┘                          │
+│                          🔒 mouse locked · Ctrl+Alt+Shift+M │
+└────────────────────────────────────────────────────────────┘</pre></div>
+</section>
+
+<section id="acceptance">
+  <h2><span class="tag">§8</span>Acceptance criteria</h2>
+  <p>Simulated LAN means two Linux network namespaces joined by a veth pair on this machine, shaped with netem. Criteria tagged <span class="pill gate">hardware gate</span> are checked when the named hardware is connected. Until then they are reported as "environment-blocked", never as passed.</p>
+  <div class="scroll"><table>
+    <thead><tr><th>ID</th><th>Check</th><th>Covers</th></tr></thead>
+    <tbody>
+      <tr><td class="id">A1</td><td>Host in namespace A, <code>qr-client --list</code> in namespace B: the host is listed within 3 s.</td><td class="num">R1</td></tr>
+      <tr><td class="id">A2</td><td>Pair with the right PIN: the session starts. Reconnect: no PIN is asked. A fresh client with a wrong PIN or none: refused. Six wrong PINs in a minute: the client is ignored for 60 s.</td><td class="num">R2</td></tr>
+      <tr><td class="id">A3</td><td>A packet capture on the relay shows no plaintext (a known marker string sent in the clipboard never appears). A client given a wrong host key aborts the handshake.</td><td class="num">R3</td></tr>
+      <tr><td class="id">A4</td><td>Three namespaces behind two simulated NATs (cone NAT, then symmetric NAT) plus a relay namespace: the cone pair connects "Direct", the symmetric pair connects "Relayed", and both stream video.</td><td class="num">R4, R5</td></tr>
+      <tr><td class="id">A5</td><td><code>docker run</code> of the relay image serves rendezvous; with the relay stopped, A1 and A6 still pass.</td><td class="num">R5</td></tr>
+      <tr><td class="id">A6</td><td>Take the veth link down for 3 s mid-session while a key is held: the session resumes on its own within 5 s of the link coming back, with no PIN, and <code>xinput</code>/<code>evtest</code> on the host shows the key released.</td><td class="num">R6, R23</td></tr>
+      <tr><td class="id">A7</td><td>The stats overlay and <code>--stats-json</code> name the codec and encoder. On this machine that is H.264 on VA-API (HEVC once the non-free Intel driver from setup is installed). With VA-API hidden it falls back to a software encoder.</td><td class="num">R7</td></tr>
+      <tr><td class="id">A8</td><td><code>qr-latency</code> (the client stamps the decoded frame against the host's capture clock, offset-synced) over simulated gigabit LAN at 1080p60, 2-minute run: p50 ≤ 12 ms, p95 ≤ 20 ms on this machine's UHD 630.</td><td class="num">R8</td></tr>
+      <tr><td class="id">A9</td><td><span class="pill gate">hardware gate: NVIDIA/AMD host</span> Same as A8 at 1080p120 and at 4K60: full frame rate, p95 ≤ 20 ms. Plus a photodiode or high-speed camera glass-to-glass sample on a real LAN.</td><td class="num">R8</td></tr>
+      <tr><td class="id">A10</td><td>netem at 10 Mbps, 50 ms RTT, 1% loss for 3 minutes: the longest gap between presented frames is ≤ 500 ms, and the bitrate is stable within 5 s. Halving and restoring the rate drops fps first, then recovers.</td><td class="num">R9</td></tr>
+      <tr><td class="id">A11</td><td>5% random loss on LAN and 10% on the internet profile: the overlay counts FEC repairs, and keyframe requests stay at 0 for runs without burst loss. A 200 ms blackout restores a clean picture within RTT + 1 frame.</td><td class="num">R10</td></tr>
+      <tr><td class="id">A12</td><td>A text-heavy page (terminal with 9 px text) with sharp-text on: SSIM ≥ 0.98 against the host's frame once the screen is still. With 4:4:4 the decoded chroma planes are full size.</td><td class="num">R11</td></tr>
+      <tr><td class="id">A13</td><td>A GPU 3D app (glmark2 or vkcube) in the virtual display at 60 fps: the stream holds 60 fps, and a trace shows no CPU readback between capture and encode.</td><td class="num">R12, R13</td></tr>
+      <tr><td class="id">A14</td><td>The client requests 2560×1440@120 and then resizes its window: the virtual display reports the matching modes, and the picture is never stretched.</td><td class="num">R13, R16</td></tr>
+      <tr><td class="id">A15</td><td>Capture of a nested X11 session and of a headless GNOME or KDE Wayland session through the portal; the second run asks no permission (restore token). <span class="pill gate">hardware gate: a physical Linux desktop</span> for a final check.</td><td class="num">R14</td></tr>
+      <tr><td class="id">A16</td><td>A host with 2 virtual monitors: list both, switch during a session, open a second window on the other one, and both stream.</td><td class="num">R15</td></tr>
+      <tr><td class="id">A17</td><td>A 1 kHz click track on the host: client audio latency ≤ 40 ms over playout, and the A/V offset of a flash-and-beep clip is within ±40 ms.</td><td class="num">R17</td></tr>
+      <tr><td class="id">A18</td><td>Feed a WAV into the client's mic input: <code>pw-record</code> on the host records it (correlation ≥ 0.9). With the mic off, nothing appears.</td><td class="num">R18</td></tr>
+      <tr><td class="id">A19</td><td>The client with an AZERTY layout and the host with US: the physical Q key produces the host's Q-position key. Text mode types "héllo 漢字" exactly.</td><td class="num">R19</td></tr>
+      <tr><td class="id">A20</td><td>Relative mode: 1000 synthetic deltas of +1 reach the host summing to exactly +1000, with no acceleration. The hotkey toggles mode.</td><td class="num">R20</td></tr>
+      <tr><td class="id">A21</td><td>Two virtual client pads, hot-plugged: <code>evtest</code> on the host shows two Xbox-style devices with every axis and button. A host rumble effect arrives on the client pad. Unplugging removes the device.</td><td class="num">R21</td></tr>
+      <tr><td class="id">A22</td><td>A synthetic client pen sweeps pressure 0→max with tilt and eraser: <code>evtest</code> on the host shows the same values scaled to its device range.</td><td class="num">R22</td></tr>
+      <tr><td class="id">A23</td><td>The client logs receive time and the host logs inject time, on a synced clock: p95 difference minus one-way delay ≤ 2 ms over 10,000 events.</td><td class="num">R23</td></tr>
+      <tr><td class="id">A24</td><td>Copy text and a 4 MB PNG each way: both arrive byte-identical. With sync turned off, nothing crosses.</td><td class="num">R24</td></tr>
+      <tr><td class="id">A25</td><td>A 2 GB file each way during a 1080p60 stream: the hash matches, the frame rate stays ≥ 58, and cancelling midway leaves no partial file.</td><td class="num">R25</td></tr>
+      <tr><td class="id">A26</td><td>The native client on Linux runs A1–A25. <span class="pill gate">hardware gate: Windows PC</span> runs the Windows client against the Linux host (A1, A2, A8, A21).</td><td class="num">R26</td></tr>
+      <tr><td class="id">A27</td><td>Headless Chrome with GPU flags drives the web client: video, audio, keys, pointer lock, a virtual gamepad, clipboard and files pass, and fallback to software decode works. Firefox passes the same smoke test.</td><td class="num">R27</td></tr>
+      <tr><td class="id">A28</td><td>The Android emulator (API 34) connects, decodes, and passes touch, keyboard and gamepad tests. <span class="pill gate">hardware gate: Android device</span> for hardware decode latency and Android TV remote.</td><td class="num">R28</td></tr>
+      <tr><td class="id">A29</td><td>The overlay on every client shows all listed fields, and its latency parts add up to within 1 ms of the measured total.</td><td class="num">R29</td></tr>
+      <tr><td class="id">A30</td><td>The Windows host cross-compiles in CI. <span class="pill gate">hardware gate: Windows PC</span> runs A7, A8, A13, A17 and A21 against the Windows host.</td><td class="num">R30</td></tr>
+      <tr><td class="id">A31</td><td>The Linux service (systemd) streams the display-manager greeter and survives logout and login. <span class="pill gate">hardware gate: Windows PC</span> for the lock screen and a UAC prompt.</td><td class="num">R31</td></tr>
+      <tr><td class="id">A32</td><td>The conformance suite passes for Rust and TypeScript. Peers with a forged major version 2 get the version-mismatch error.</td><td class="num">R32</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="risks">
+  <h2><span class="tag">§9</span>Risks</h2>
+  <div class="scroll"><table>
+    <thead><tr><th>Risk</th><th>Handling</th></tr></thead>
+    <tbody>
+      <tr><td>Only the UHD 630 is available. 1080p120, 4K60, AV1, Windows, Android hardware decode and real-LAN glass-to-glass can't be measured yet.</td><td>Accept: each one is a hardware gate (A9, A15, A26, A28, A30, A31), reported as environment-blocked until you connect the hardware.</td></tr>
+      <tr><td>Even the UHD 630 at 1080p60 may miss p95 ≤ 20 ms if VA-API encode plus loopback decode costs more than budgeted.</td><td>Investigate: measure encode cost in the first task of Phase 1. If it misses, the spec target stays, and A8 reports the measured number and its breakdown.</td></tr>
+      <tr><td>The Windows virtual gamepad driver (ViGEmBus) is archived upstream.</td><td>Investigate at the start of Phase 4: ViGEmBus as shipped, versus a signed Virtual HID Framework driver. The choice comes back to you before building.</td></tr>
+      <tr><td>Wayland portals differ between GNOME, KDE and wlroots, and some ask for permission every time.</td><td>Mitigate: restore tokens where supported; otherwise a one-time prompt per session, documented.</td></tr>
+      <tr><td>Symmetric NAT on both ends defeats hole punching.</td><td>Accept: relay fallback (R4). Relay bandwidth is the operator's cost.</td></tr>
+      <tr><td>Anti-cheat in some games rejects virtual input devices.</td><td>Accept: out of scope.</td></tr>
+      <tr><td>Browser decode and present add 1–2 frames of latency over native.</td><td>Accept: R8 applies to the native client. The web client reports its own numbers.</td></tr>
+      <tr><td>Overall size: five phases, three host types and three clients.</td><td>Mitigate: every phase ends usable, and the plan is the resumable tracker across sessions.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+</div>

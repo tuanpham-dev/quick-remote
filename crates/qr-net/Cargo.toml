@@ -1,0 +1,30 @@
+[package]
+name = "qr-net"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+qr-proto.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+bytes.workspace = true
+tokio.workspace = true
+quinn.workspace = true
+rustls.workspace = true
+rcgen.workspace = true
+socket2.workspace = true
+spake2.workspace = true
+hmac.workspace = true
+sha2.workspace = true
+rand.workspace = true
+data-encoding.workspace = true
+mdns-sd.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+ring = "0.17"
+dirs = "6"
+
+[dev-dependencies]
+tracing-subscriber.workspace = true
