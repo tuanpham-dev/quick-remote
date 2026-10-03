@@ -3,6 +3,7 @@
 
 mod input;
 mod media;
+mod outbox;
 mod ratectl;
 mod session;
 mod stream;
@@ -77,6 +78,13 @@ pub struct Args {
     /// `pipewire:<target>`.
     #[arg(long, default_value = "none")]
     mic_out: String,
+    /// Where files from clients are saved (default ~/Downloads/QuickRemote).
+    #[arg(long)]
+    files_dir: Option<PathBuf>,
+    /// Files put here are sent to the connected client, then removed
+    /// (default ~/QuickRemote/Outbox).
+    #[arg(long)]
+    outbox: Option<PathBuf>,
     /// Input backend: `auto` (from the source), `none`, `xtest:<display>`.
     #[arg(long, default_value = "auto")]
     input: String,
@@ -110,6 +118,16 @@ pub struct HostCtx {
 }
 
 impl HostCtx {
+    pub fn files_dir(&self) -> PathBuf {
+        self.args.files_dir.clone().unwrap_or_else(|| {
+            dirs_home().join("Downloads").join("QuickRemote")
+        })
+    }
+
+    pub fn outbox_dir(&self) -> PathBuf {
+        self.args.outbox.clone().unwrap_or_else(|| dirs_home().join("QuickRemote").join("Outbox"))
+    }
+
     /// The mode a stream runs at: the configured size for now (virtual
     /// displays follow the client's request once they exist).
     pub fn display_mode(&self, _w: u16, _h: u16, _refresh: u16) -> (u32, u32, u32) {
@@ -129,6 +147,10 @@ fn x11_size(display: &str) -> Result<(u32, u32)> {
     let (conn, screen) = x11rb::connect(Some(display))?;
     let s = &conn.setup().roots[screen];
     Ok((s.width_in_pixels as u32, s.height_in_pixels as u32))
+}
+
+fn dirs_home() -> PathBuf {
+    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."))
 }
 
 fn hostname() -> String {

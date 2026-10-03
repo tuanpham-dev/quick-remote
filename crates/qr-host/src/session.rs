@@ -104,7 +104,25 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
     };
     ctx.input.reset();
     let dgram_task = tokio::spawn(crate::media::datagram_loop(ctx.clone(), conn.clone()));
-    let uni_task = tokio::spawn(uni_streams(ctx.clone(), conn.clone()));
+    // Control messages from background tasks (files, outbox) go through a
+    // channel to one writer.
+    let (ctl_tx, mut ctl_rx) = tokio::sync::mpsc::unbounded_channel::<Msg>();
+    let ctl_writer = {
+        let tx = control_tx.clone();
+        tokio::spawn(async move {
+            while let Some(m) = ctl_rx.recv().await {
+                if send(&tx, &m).await.is_err() {
+                    return;
+                }
+            }
+        })
+    };
+    let ctl: qr_net::files::Control = Arc::new(move |m| {
+        let _ = ctl_tx.send(m);
+    });
+    let files = qr_net::files::Files::new(conn.clone(), ctx.files_dir(), 2);
+    let uni_task = tokio::spawn(uni_streams(ctx.clone(), conn.clone(), files.clone(), ctl.clone()));
+    let outbox_task = tokio::spawn(crate::outbox::run(ctx.outbox_dir(), files.clone(), ctl.clone()));
     send(
         &control_tx,
         &Msg::StreamStarted {
@@ -164,7 +182,9 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
         })
     };
 
-    let result = control_loop(&conn, &mut control_rx, &control_tx, &stream).await;
+    let result = control_loop(&conn, &mut control_rx, &control_tx, &stream, &files, &ctl).await;
+    ctl_writer.abort();
+    outbox_task.abort();
     stats_task.abort();
     dgram_task.abort();
     uni_task.abort();
@@ -178,9 +198,14 @@ async fn control_loop(
     rx: &mut qr_net::session::FramedRecv,
     tx: &AsyncMutex<FramedSend>,
     stream: &Arc<VideoStream>,
+    files: &Arc<qr_net::files::Files>,
+    ctl: &qr_net::files::Control,
 ) -> Result<()> {
     loop {
         let m = rx.recv().await?;
+        if files.on_control(&m, ctl) {
+            continue;
+        }
         match m {
             Msg::Ping { seq, t_client } => {
                 send(tx, &Msg::Pong { seq, t_client, t_host: qr_net::clock::now_us() }).await?;
@@ -195,8 +220,13 @@ async fn control_loop(
     }
 }
 
-/// Accepts the client's unidirectional streams: input (and files, later).
-async fn uni_streams(ctx: Arc<HostCtx>, conn: quinn::Connection) {
+/// Accepts the client's unidirectional streams: input and files.
+async fn uni_streams(
+    ctx: Arc<HostCtx>,
+    conn: quinn::Connection,
+    files: Arc<qr_net::files::Files>,
+    ctl: qr_net::files::Control,
+) {
     while let Ok(mut st) = conn.accept_uni().await {
         let mut kind = [0u8; 1];
         if st.read_exact(&mut kind).await.is_err() {
@@ -215,6 +245,14 @@ async fn uni_streams(ctx: Arc<HostCtx>, conn: quinn::Connection) {
                     }
                     // The stream ended (or broke): nothing stays pressed.
                     ctx.input.release_all();
+                });
+            }
+            qr_proto::uni::FILE => {
+                let (files, ctl) = (files.clone(), ctl.clone());
+                tokio::spawn(async move {
+                    if let Err(e) = files.receive(st, &ctl).await {
+                        tracing::info!("file transfer failed: {e:#}");
+                    }
                 });
             }
             other => tracing::debug!(other, "unknown stream type"),

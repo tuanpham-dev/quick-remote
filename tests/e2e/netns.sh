@@ -20,7 +20,8 @@ set -euo pipefail
 
 if [[ "${1:-}" != __inner ]]; then
 	[[ $# -ge 2 ]] || { sed -n '2,20p' "$0"; exit 2; }
-	export LOGDIR="${LOGDIR:-$(mktemp -d /tmp/qr-e2e.XXXXXX)}"
+	mkdir -p "$(dirname "$0")/../../out"
+	export LOGDIR="${LOGDIR:-$(mktemp -d "$(dirname "$0")/../../out/e2e.XXXXXX")}"
 	exec unshare --user --map-root-user --net --fork --kill-child bash "$0" __inner "$@"
 fi
 shift

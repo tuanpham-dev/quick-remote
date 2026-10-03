@@ -62,6 +62,15 @@ struct Args {
     /// Write `<event> <CLOCK_MONOTONIC µs>` for each input event sent.
     #[arg(long)]
     input_trace: Option<String>,
+    /// Headless: send these files to the host.
+    #[arg(long)]
+    send_file: Vec<PathBuf>,
+    /// Headless (tests): cancel uploads after this many bytes.
+    #[arg(long)]
+    cancel_after: Option<u64>,
+    /// Where files from the host are saved (default ~/Downloads).
+    #[arg(long)]
+    recv_dir: Option<PathBuf>,
     /// Host audio output: `default`, `none`, `file:<wav>`.
     #[arg(long, default_value = "default")]
     audio_out: String,
@@ -75,6 +84,12 @@ struct Args {
 
 fn hostname() -> String {
     std::fs::read_to_string("/etc/hostname").map(|s| s.trim().to_string()).unwrap_or_else(|_| "client".into())
+}
+
+fn recv_dir(args: &Args) -> PathBuf {
+    args.recv_dir.clone().unwrap_or_else(|| {
+        std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(".")).join("Downloads")
+    })
 }
 
 fn audio_out(s: &str) -> Option<qr_media::audio::AudioSink> {
@@ -227,6 +242,7 @@ async fn cli(args: Args) -> Result<()> {
         keep_samples: args.latency_log.is_some(),
         audio_out: audio_out(&args.audio_out),
         mic: args.mic.as_deref().map(mic_source),
+        recv_dir: recv_dir(&args),
     };
     let c = session::connect(&id, &keystore, opts, sink).await?;
     eprintln!("connected to {} ({})", c.host_name, c.host_id);
@@ -237,6 +253,31 @@ async fn cli(args: Args) -> Result<()> {
     };
     if let Some(p) = &args.input_trace {
         qr_net::trace::open(p)?;
+    }
+    {
+        let mut ev = c.files.events.subscribe();
+        let (files, ctl, cancel_after) = (c.files.clone(), c.ctl.clone(), args.cancel_after);
+        tokio::spawn(async move {
+            use qr_net::files::Progress;
+            let mut cancelled = std::collections::HashSet::new();
+            while let Ok(e) = ev.recv().await {
+                match e {
+                    Progress::Sending { id, done, .. } => {
+                        if cancel_after.is_some_and(|n| done >= n) && cancelled.insert(id) {
+                            eprintln!("FILE cancel {id} at {done}");
+                            files.cancel(id, &ctl);
+                        }
+                    }
+                    Progress::Sent { name, .. } => eprintln!("FILE sent {name}"),
+                    Progress::Received { path, .. } => eprintln!("FILE received {}", path.display()),
+                    Progress::Failed { name, reason, .. } => eprintln!("FILE failed {name}: {reason}"),
+                    Progress::Receiving { .. } => {}
+                }
+            }
+        });
+    }
+    for p in &args.send_file {
+        c.files.offer(p, &c.ctl).await?;
     }
     if let Some(path) = args.script.clone() {
         let input = c.input.clone();

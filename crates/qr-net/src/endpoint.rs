@@ -21,7 +21,10 @@ pub fn transport_config() -> quinn::TransportConfig {
     t.datagram_send_buffer_size(BUFFER);
     t.stream_receive_window((16u32 * 1024 * 1024).into());
     t.receive_window((64u32 * 1024 * 1024).into());
-    t.send_window(64 * 1024 * 1024);
+    // Unacknowledged stream data quinn may buffer. A big backlog of file
+    // data queues in front of video datagrams; 4 MiB still covers
+    // 1 Gbit/s × 30 ms.
+    t.send_window(4 * 1024 * 1024);
     t.max_concurrent_uni_streams(64u32.into());
     t.max_concurrent_bidi_streams(8u32.into());
     t.initial_rtt(Duration::from_millis(10));
@@ -51,11 +54,51 @@ pub fn bind_socket(addr: SocketAddr) -> Result<UdpSocket> {
         // Dual-stack, so one socket serves IPv4 and IPv6 peers.
         let _ = s.set_only_v6(false);
     }
-    let _ = s.set_recv_buffer_size(BUFFER);
-    let _ = s.set_send_buffer_size(BUFFER);
+    set_buffers(&s);
     s.bind(&addr.into()).with_context(|| format!("binding UDP {addr}"))?;
     s.set_nonblocking(true)?;
     Ok(s.into())
+}
+
+/// Asks for [`BUFFER`]-sized kernel socket buffers. Linux caps the request
+/// at `net.core.rmem_max` (often 208 KiB), and a buffer that small drops
+/// packets whenever a burst arrives (measured: 13k drops during a file
+/// transfer next to a 1080p60 stream). `SO_RCVBUFFORCE` bypasses the cap
+/// where allowed (CAP_NET_ADMIN); otherwise the shortfall is logged with
+/// the fix.
+fn set_buffers(s: &socket2::Socket) {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        let v = BUFFER as libc::c_int;
+        for opt in [libc::SO_RCVBUFFORCE, libc::SO_SNDBUFFORCE] {
+            // SAFETY: setsockopt reads one c_int from `v` on a valid socket.
+            unsafe {
+                libc::setsockopt(
+                    s.as_raw_fd(),
+                    libc::SOL_SOCKET,
+                    opt,
+                    &v as *const _ as *const libc::c_void,
+                    std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+                );
+            }
+        }
+    }
+    if s.recv_buffer_size().unwrap_or(0) < BUFFER {
+        let _ = s.set_recv_buffer_size(BUFFER);
+    }
+    if s.send_buffer_size().unwrap_or(0) < BUFFER {
+        let _ = s.set_send_buffer_size(BUFFER);
+    }
+    // Linux reports double the usable size.
+    let got = s.recv_buffer_size().unwrap_or(0) / if cfg!(target_os = "linux") { 2 } else { 1 };
+    if got < BUFFER / 2 {
+        tracing::warn!(
+            "UDP receive buffer is {} KiB; bursts will drop packets. Raise the limit: \
+             sudo sysctl -w net.core.rmem_max=16777216 net.core.wmem_max=16777216",
+            got / 1024
+        );
+    }
 }
 
 pub fn server_config(id: &Identity, alpn: &[&[u8]]) -> Result<quinn::ServerConfig> {

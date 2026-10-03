@@ -3,7 +3,8 @@
 #   tests/e2e/run.sh [phase1|a1_a2|...]
 set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
-export LOGDIR="${LOGDIR:-$(mktemp -d /tmp/qr-e2e.XXXXXX)}"
+mkdir -p "$here/../../out"
+export LOGDIR="${LOGDIR:-$(mktemp -d "$here/../../out/e2e.XXXXXX")}"
 export RESULTS="$LOGDIR/results.txt"
 : >"$RESULTS"
 cargo build -q -p qr-host -p qr-client --manifest-path "$here/../../Cargo.toml" || exit 1

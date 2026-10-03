@@ -28,6 +28,14 @@ echo uinput >/etc/modules-load.d/quickremote.conf
 udevadm control --reload-rules
 udevadm trigger --name-match=uinput || true
 
+# Large UDP socket buffers: video and file bursts overflow the default
+# 208 KiB and drop packets.
+cat >/etc/sysctl.d/90-quickremote.conf <<'SYSCTL'
+net.core.rmem_max = 16777216
+net.core.wmem_max = 16777216
+SYSCTL
+sysctl -p /etc/sysctl.d/90-quickremote.conf
+
 for g in input kvm docker render video; do
   getent group "$g" >/dev/null && usermod -aG "$g" "$user"
 done

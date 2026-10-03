@@ -538,6 +538,7 @@ async fn connect_once(
         keep_samples: false,
         audio_out: Some(qr_media::audio::AudioSink::Default),
         mic: None,
+        recv_dir: std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default().join("Downloads"),
     };
     let c = Arc::new(session::connect(&cfg.id, &cfg.keystore, opts, sink).await?);
     let mut ended = c.ended.clone();
@@ -680,6 +681,16 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::RedrawRequested => self.redraw(),
+            WindowEvent::DroppedFile(path) => {
+                if let Some(s) = &self.session {
+                    let (files, ctl) = (s.files.clone(), s.ctl.clone());
+                    self.rt.spawn(async move {
+                        if let Err(e) = files.offer(&path, &ctl).await {
+                            tracing::warn!("can't send {}: {e:#}", path.display());
+                        }
+                    });
+                }
+            }
             WindowEvent::ModifiersChanged(m) => self.mods = m.state(),
             WindowEvent::Focused(false) => {
                 self.release_all();

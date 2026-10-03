@@ -116,6 +116,9 @@ pub struct Connected {
     pub tasks: Vec<tokio::task::JoinHandle<()>>,
     pub ended: tokio::sync::watch::Receiver<Option<String>>,
     pub input: Input,
+    pub files: Arc<qr_net::files::Files>,
+    /// Sends a control message from any thread.
+    pub ctl: qr_net::files::Control,
 }
 
 /// Sends input: keys, buttons and text on the reliable input stream;
@@ -192,6 +195,8 @@ pub struct ConnectOpts {
     pub audio_out: Option<AudioSink>,
     /// Microphone to send to the host (`None`: off).
     pub mic: Option<AudioSource>,
+    /// Where files from the host are saved.
+    pub recv_dir: std::path::PathBuf,
 }
 
 /// Called with every decoded frame (window mode renders it).
@@ -357,12 +362,53 @@ pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, 
             let _ = end_tx.send(Some(r.err().map_or("closed".into(), |e| e.to_string())));
         }));
     }
+    // Control messages from other tasks and threads go through one writer.
+    let (ctl_tx, mut ctl_rx) = tokio::sync::mpsc::unbounded_channel::<Msg>();
+    {
+        let control = control.clone();
+        tasks.push(tokio::spawn(async move {
+            while let Some(m) = ctl_rx.recv().await {
+                if control.lock().await.send(&m).await.is_err() {
+                    return;
+                }
+            }
+        }));
+    }
+    let ctl: qr_net::files::Control = Arc::new(move |m| {
+        let _ = ctl_tx.send(m);
+    });
+    let files = qr_net::files::Files::new(conn.clone(), o.recv_dir.clone(), 1);
+    // Streams from the host (files).
+    {
+        let (conn, files, ctl) = (conn.clone(), files.clone(), ctl.clone());
+        tasks.push(tokio::spawn(async move {
+            while let Ok(mut st) = conn.accept_uni().await {
+                let mut kind = [0u8; 1];
+                if st.read_exact(&mut kind).await.is_err() || kind[0] != qr_proto::uni::FILE {
+                    continue;
+                }
+                let (files, ctl) = (files.clone(), ctl.clone());
+                tokio::spawn(async move {
+                    if let Err(e) = files.receive(st, &ctl).await {
+                        tracing::info!("file transfer failed: {e:#}");
+                    }
+                });
+            }
+        }));
+    }
+
     // Control receive loop.
     {
-        let (shared, end_tx) = (shared.clone(), end_tx.clone());
+        let (shared, end_tx, files, ctl) = (shared.clone(), end_tx.clone(), files.clone(), ctl.clone());
         tasks.push(tokio::spawn(async move {
             loop {
-                match rx.recv().await {
+                let m = rx.recv().await;
+                if let Ok(m) = &m
+                    && files.on_control(m, &ctl)
+                {
+                    continue;
+                }
+                match m {
                     Ok(Msg::Pong { t_client, t_host, .. }) => {
                         shared.lock().expect("lock").clock.sample(t_client, t_host, now_us());
                     }
@@ -427,6 +473,8 @@ pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, 
         tasks,
         ended,
         input,
+        files,
+        ctl,
     })
 }
 
