@@ -38,6 +38,10 @@ pub struct VideoStream {
     /// Parity ratio and loss estimate ×1000, read by the sender per frame.
     parity: Arc<AtomicU32>,
     loss: Arc<AtomicU32>,
+    /// Sharp-text mode: one high-quality refresh frame when the screen
+    /// goes still.
+    pub sharp: Arc<std::sync::atomic::AtomicBool>,
+    target_kbps: Arc<AtomicU32>,
     sender: tokio::task::JoinHandle<()>,
 }
 
@@ -58,8 +62,19 @@ impl VideoStream {
         let counters = Arc::new(StreamCounters::default());
         let parity = Arc::new(AtomicU32::new((rate.parity * 1000.0) as u32));
         let loss = Arc::new(AtomicU32::new((rate.loss_ewma * 1000.0) as u32));
-        let sender =
-            tokio::spawn(send_loop(id, rx, conn, encoder.clone(), counters.clone(), parity.clone(), loss.clone()));
+        let sharp = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let target_kbps = Arc::new(AtomicU32::new(rate.target_kbps));
+        let refresh = Refresh { sharp: sharp.clone(), target_kbps: target_kbps.clone() };
+        let sender = tokio::spawn(send_loop(
+            id,
+            rx,
+            conn,
+            encoder.clone(),
+            counters.clone(),
+            parity.clone(),
+            loss.clone(),
+            refresh,
+        ));
         let s = Arc::new(Self {
             id,
             encoder,
@@ -70,6 +85,8 @@ impl VideoStream {
             last_keyframe_req: Mutex::new(None),
             parity,
             loss,
+            sharp,
+            target_kbps,
             sender,
         });
         Ok(s)
@@ -83,6 +100,7 @@ impl VideoStream {
             self.encoder.set_max_fps(r.fps);
             self.parity.store((r.parity * 1000.0) as u32, Ordering::Relaxed);
             self.loss.store((r.loss_ewma * 1000.0) as u32, Ordering::Relaxed);
+            self.target_kbps.store(r.target_kbps, Ordering::Relaxed);
             tracing::debug!(kbps = r.target_kbps, fps = r.fps, parity = r.parity, "rate");
         }
     }
@@ -118,7 +136,9 @@ async fn send_loop(
     counters: Arc<StreamCounters>,
     parity_permille: Arc<AtomicU32>,
     loss_permille: Arc<AtomicU32>,
+    refresh: Refresh,
 ) {
+    let mut still = StillState { last_change: std::time::Instant::now(), refreshing: false, refreshed: false };
     let mut frame_id: u32 = 0;
     let mut pk = Packetizer::new(stream, 1200, 0.1);
     let buffer = qr_net::endpoint::BUFFER as f64;
@@ -144,9 +164,10 @@ async fn send_loop(
         pk.max_datagram = max;
         pk.parity = parity_permille.load(Ordering::Relaxed) as f32 / 1000.0;
         pk.loss = loss_permille.load(Ordering::Relaxed) as f32 / 1000.0;
+        let is_refresh = still.frame(&f, &refresh, &encoder);
         let meta = FrameMeta {
             codec: f.codec as u8,
-            flags: if f.keyframe { fflags::KEYFRAME } else { 0 },
+            flags: if f.keyframe { fflags::KEYFRAME } else { 0 } | if is_refresh { fflags::REFRESH } else { 0 },
             width: f.width as u16,
             height: f.height as u16,
             len: 0,
@@ -172,5 +193,53 @@ async fn send_loop(
         // Hold capture while the datagram queue is more than half full.
         let fill = 1.0 - conn.datagram_send_buffer_space() as f64 / buffer;
         encoder.hold(fill > HOLD_FILL);
+    }
+}
+
+/// What the sender needs for sharp-text refreshes.
+struct Refresh {
+    sharp: Arc<std::sync::atomic::AtomicBool>,
+    target_kbps: Arc<AtomicU32>,
+}
+
+/// Detects a still screen and sends one refresh frame: 300 ms after the
+/// last change, a keyframe at 8× the per-frame budget, so text that went
+/// soft while things moved ends up crisp.
+struct StillState {
+    last_change: std::time::Instant,
+    refreshing: bool,
+    refreshed: bool,
+}
+
+/// P-frames of an unchanged screen are a few hundred bytes at most.
+const STILL_FRAME_BYTES: usize = 800;
+const STILL_AFTER: Duration = Duration::from_millis(300);
+const REFRESH_BOOST: u32 = 8;
+
+impl StillState {
+    /// Accounts for one encoded frame; returns whether it is the refresh.
+    fn frame(&mut self, f: &EncodedFrame, r: &Refresh, enc: &Encoder) -> bool {
+        let now = std::time::Instant::now();
+        let target = r.target_kbps.load(Ordering::Relaxed);
+        if self.refreshing && f.keyframe {
+            self.refreshing = false;
+            self.refreshed = true;
+            enc.set_bitrate(target);
+            return true;
+        }
+        if !f.keyframe && f.au.len() > STILL_FRAME_BYTES {
+            self.last_change = now;
+            self.refreshed = false;
+        }
+        if r.sharp.load(Ordering::Relaxed)
+            && !self.refreshing
+            && !self.refreshed
+            && now.duration_since(self.last_change) >= STILL_AFTER
+        {
+            self.refreshing = true;
+            enc.set_bitrate(target.saturating_mul(REFRESH_BOOST));
+            enc.force_keyframe();
+        }
+        false
     }
 }

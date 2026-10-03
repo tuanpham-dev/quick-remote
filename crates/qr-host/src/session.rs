@@ -222,6 +222,11 @@ async fn control_loop(
             Msg::FrameLost { .. } | Msg::KeyframeReq { .. } => {
                 stream.frame_lost(conn.rtt().max(Duration::from_millis(30)));
             }
+            Msg::SetMode { modes } => {
+                let sharp = modes & qr_proto::msg::mode::SHARP_TEXT != 0;
+                stream.sharp.store(sharp, std::sync::atomic::Ordering::Relaxed);
+                tracing::info!(sharp, "sharp-text mode");
+            }
             Msg::Bye => return Ok(()),
             other => tracing::debug!(?other, "unhandled control message"),
         }

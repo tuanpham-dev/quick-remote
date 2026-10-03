@@ -77,6 +77,13 @@ struct Args {
     /// Don't sync the clipboard.
     #[arg(long)]
     no_clipboard: bool,
+    /// Turn sharp-text mode on at the start.
+    #[arg(long)]
+    sharp: bool,
+    /// Headless: at exit, write the last decoded picture's planes to this
+    /// file and its layout to `<file>.json`.
+    #[arg(long)]
+    dump_frame: Option<PathBuf>,
     /// Host audio output: `default`, `none`, `file:<wav>`.
     #[arg(long, default_value = "default")]
     audio_out: String,
@@ -234,8 +241,13 @@ async fn cli(args: Args) -> Result<()> {
 
     let decoded = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let d2 = decoded.clone();
-    let sink: session::FrameSink = Arc::new(move |_f, _t| {
+    let last_frame: Arc<Mutex<Option<qr_media::decode::DecodedFrame>>> = Arc::default();
+    let lf = args.dump_frame.is_some().then(|| last_frame.clone());
+    let sink: session::FrameSink = Arc::new(move |f, _t| {
         d2.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Some(lf) = &lf {
+            *lf.lock().expect("lock") = Some(f);
+        }
     });
     let opts = session::ConnectOpts {
         addr,
@@ -287,6 +299,9 @@ async fn cli(args: Args) -> Result<()> {
             }
         });
     }
+    if args.sharp {
+        (c.ctl)(qr_proto::Msg::SetMode { modes: qr_proto::msg::mode::SHARP_TEXT });
+    }
     for p in &args.send_file {
         c.files.offer(p, &c.ctl).await?;
     }
@@ -325,6 +340,14 @@ async fn cli(args: Args) -> Result<()> {
         for s in &c.shared.lock().expect("lock").samples {
             writeln!(f, "{}", serde_json::to_string(s)?)?;
         }
+    }
+    if let (Some(p), Some(f)) = (&args.dump_frame, last_frame.lock().expect("lock").as_ref()) {
+        std::fs::write(p, &f.data)?;
+        let meta = serde_json::json!({
+            "width": f.width, "height": f.height, "format": format!("{:?}", f.format),
+            "offsets": f.offsets, "strides": f.strides,
+        });
+        std::fs::write(p.with_extension("json"), meta.to_string())?;
     }
     session::bye(&c).await;
     eprintln!("decoded {} frames; {reason}", decoded.load(std::sync::atomic::Ordering::Relaxed));

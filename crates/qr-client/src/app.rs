@@ -81,6 +81,7 @@ pub struct App {
     addr_input: String,
     show_stats: bool,
     relative: bool,
+    sharp: bool,
     mods: ModifiersState,
     held: HashSet<u16>,
     cursor: (f64, f64),
@@ -132,6 +133,7 @@ pub fn run(cfg: Config) -> Result<()> {
         addr_input: String::new(),
         show_stats: false,
         relative: false,
+        sharp: false,
         mods: ModifiersState::empty(),
         held: HashSet::new(),
         cursor: (0.0, 0.0),
@@ -258,15 +260,10 @@ impl App {
                 }
             }
             KeyCode::KeyT => {
+                self.sharp = !self.sharp;
                 if let Some(s) = &self.session {
-                    let c = s.control.clone();
-                    self.rt.spawn(async move {
-                        let _ = c
-                            .lock()
-                            .await
-                            .send(&qr_proto::Msg::SetMode { modes: qr_proto::msg::mode::SHARP_TEXT })
-                            .await;
-                    });
+                    let modes = if self.sharp { qr_proto::msg::mode::SHARP_TEXT } else { 0 };
+                    (s.ctl)(qr_proto::Msg::SetMode { modes });
                 }
             }
             KeyCode::KeyQ => {

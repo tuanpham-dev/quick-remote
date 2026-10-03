@@ -121,7 +121,7 @@ fn encode_desc(el: &str, codec: Codec, family: Family, format: &str) -> String {
     };
     format!(
         "videotestsrc num-buffers=4 ! video/x-raw,format={format},width={PROBE_W},height={PROBE_H},framerate=30/1 \
-         ! videoconvert ! {el}{props} ! {} ! {caps} ! appsink name=out sync=false",
+         ! videoconvert ! video/x-raw,format={format} ! {el}{props} ! {} ! {caps} ! appsink name=out sync=false",
         parser(codec)
     )
 }
@@ -152,6 +152,8 @@ pub struct DecoderInfo {
     pub element: &'static str,
     pub codec: Codec,
     pub hw: bool,
+    /// Decodes 4:4:4 streams (sharp-text mode).
+    pub chroma444: bool,
 }
 
 /// Decoders that decode a stream from a working software encoder.
@@ -169,10 +171,24 @@ pub fn decoders() -> Result<Vec<DecoderInfo>> {
         };
         let desc = format!(
             "{} ! {el} ! videoconvert ! video/x-raw,format=NV12 ! appsink name=out sync=false",
-            encode_desc(enc.0, codec, enc.2, "NV12").replace(" ! appsink name=out sync=false", "")
+            encode_desc(enc.0, codec, enc.2, "I420").replace(" ! appsink name=out sync=false", "")
         );
         if run(&desc, "out", Duration::from_secs(5)).is_some() {
-            out.push(DecoderInfo { element: el, codec, hw });
+            // 4:4:4: only x264/x265 encode it here; a decoder that can't
+            // handle the profile errors out.
+            let enc444 = match codec {
+                Codec::H264 => Some(("x264enc", Family::X264)),
+                Codec::H265 => Some(("x265enc", Family::X265)),
+                Codec::Av1 => None,
+            };
+            let chroma444 = enc444.filter(|(e, _)| gst::ElementFactory::find(e).is_some()).is_some_and(|(e, f)| {
+                let desc = format!(
+                    "{} ! {el} ! videoconvert ! video/x-raw,format=Y444 ! appsink name=out sync=false",
+                    encode_desc(e, codec, f, "Y444").replace(" ! appsink name=out sync=false", "")
+                );
+                run(&desc, "out", Duration::from_secs(5)).is_some()
+            });
+            out.push(DecoderInfo { element: el, codec, hw, chroma444 });
         } else {
             tracing::debug!(el, "decoder registered but does not work here");
         }
@@ -187,7 +203,8 @@ pub fn decoder_caps(decs: &[DecoderInfo]) -> Vec<CodecCap> {
         if caps.iter().any(|c| c.codec == d.codec) {
             continue;
         }
-        caps.push(CodecCap { codec: d.codec, hw: d.hw, max_width: 4096, max_height: 2304, chroma444: !d.hw });
+        let chroma444 = decs.iter().any(|x| x.codec == d.codec && x.chroma444);
+        caps.push(CodecCap { codec: d.codec, hw: d.hw, max_width: 4096, max_height: 2304, chroma444 });
     }
     caps
 }

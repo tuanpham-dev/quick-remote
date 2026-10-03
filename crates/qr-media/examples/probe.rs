@@ -4,7 +4,7 @@ fn main() -> anyhow::Result<()> {
         println!("enc {:14} {:5} hw={} 444={}", e.element, e.codec.name(), e.hw, e.chroma444);
     }
     for d in qr_media::probe::decoders()? {
-        println!("dec {:14} {:5} hw={}", d.element, d.codec.name(), d.hw);
+        println!("dec {:14} {:5} hw={} 444={}", d.element, d.codec.name(), d.hw, d.chroma444);
     }
     Ok(())
 }

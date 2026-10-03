@@ -15,6 +15,20 @@ use gstreamer::glib;
 use gstreamer::prelude::*;
 use qr_proto::Codec;
 
+/// Text rendered by the `test:text` source: 9-pixel-high monospace lines
+/// of code, logs and look-alike glyphs. No quotes or backslashes, since it
+/// goes into a pipeline description.
+pub const TEST_TEXT: &str = "fn main() { let total: u64 = (1..=1000).filter(|n| n % 3 == 0 || n % 5 == 0).sum(); }
+  println!(sum = {total});  // 233168 - the quick brown fox jumps over the lazy dog 0123456789
+  $ cargo build --release 2>&1 | grep -E warning|error | sort | uniq -c | sort -rn | head -20
+  ~/src/quick-remote $ git log --oneline --graph --decorate --all | head -40 # ABCDEFGHIJKLMNOPQRSTUVWXYZ
+  [INFO] 2026-10-03T05:46:32.488949Z qr_net::endpoint: UDP receive buffer is 208 KiB; bursts will drop
+  iiiillllIIII1111|||| oooo0000OOOO .,;:!?()[]{}<>/ @#%^&*-_=+ ~ aAbBcCdDeEfFgGhH ;; ::
+fn parity_for(&self, k: usize) -> usize { let mut m = ((k as f32 * self.parity).ceil() as usize).max(1);
+  while m < 255 - k && block_failure(k, m, self.loss as f64) > BLOCK_FAILURE { m += 1; } m.min(255 - k) }
+  tuanp@debian:~/works$ ls -la /dev/dri/ /dev/uinput /proc/sys/net/core/rmem_max  # 212992 bytes
+  The quick brown fox jumps over the lazy dog. THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG. 1234567890";
+
 /// Initializes GStreamer once.
 pub fn init() -> Result<()> {
     static INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();

@@ -90,8 +90,19 @@ pub struct Encoder {
     rate: std::sync::Mutex<(u32, u32)>,
 }
 
-fn source_desc(s: &Source, w: u32, h: u32, fps: u32) -> String {
+/// The GStreamer description of a capture source (also used by tests to
+/// render reference pictures).
+pub fn source_desc(s: &Source, w: u32, h: u32, fps: u32) -> String {
     match s {
+        // A still page of 9-pixel monospace text (sharp-text tests).
+        Source::Test { pattern } if pattern == "text" => format!(
+            "videotestsrc is-live=true pattern=white ! video/x-raw,width={w},height={h},framerate={fps}/1 \
+             ! textoverlay text=\"{}\" font-desc=\"DejaVu Sans Mono 7\" halignment=left valignment=top \
+               line-alignment=left auto-resize=false color=0xff000000 shaded-background=false \
+               draw-shadow=false draw-outline=false ! videoconvert",
+            // textoverlay takes Pango markup.
+            crate::TEST_TEXT.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+        ),
         Source::Test { pattern } => {
             format!("videotestsrc is-live=true pattern={pattern} ! video/x-raw,width={w},height={h},framerate={fps}/1")
         }

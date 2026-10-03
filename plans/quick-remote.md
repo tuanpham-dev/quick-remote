@@ -513,6 +513,7 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
 - T1.13/T1.16 (partial): Opus audio both ways with PLC. Mic WAV → host WAV correlation is 0.997 on loopback. Audio latency estimate is about 18 ms. The private PipeWire sink/source arrives with the virtual display.
 - T1.21: clipboard is a shared `qr-clip` crate (X11 CLIPBOARD via XFixes, INCR both ways) used by host and client, so PNGs stay byte-identical. A24 passes 3/3. Windows/macOS/Wayland clients need their own backend later (T4.5 / Phase 5).
 - T1.22: files go both ways (client `--send-file` and drag and drop; host outbox folder `~/QuickRemote/Outbox`), paced by RTT, with stream priority below video. A25a/b/d pass. A25c (frame rate during transfers) is ENV-BLOCKED: `net.core.rmem_max` is 208 KiB, and the client drops 13–17k UDP packets in each run. `setup-root.sh` now raises it.
+- T1.25 (partial): the still-screen refresh is done (300 ms after the last change, one keyframe at 8× budget) and A12 passes (SSIM 0.9998). A still page also converges without the mode, so A12 doesn't show the refresh's benefit right after motion stops. 4:4:4 needs a 4:4:4 decoder on the client (`avdec_h264` from gstreamer1.0-libav, in setup) plus a stream restart; it isn't wired yet.
 - T1.17/T1.18 (partial): input stream, motion running totals, XTest injector and the `--script` test driver. A19a, A20 and A23 pass (input p95 0.56–0.66 ms). uinput waits on root setup.
 
 ## Open Questions / Risks
