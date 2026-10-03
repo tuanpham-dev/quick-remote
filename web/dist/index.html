@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>QuickRemote</title>
+<style>
+  :root { color-scheme: dark; --bg: #0b0d10; --fg: #e6e9ee; --muted: #9aa4b2; --panel: rgba(16, 20, 26, 0.86); --accent: #6aa8ff; }
+  html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; overflow: hidden; }
+  #v { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; outline: none; }
+  #overlay { position: absolute; top: 12px; left: 12px; padding: 8px 10px; background: var(--panel); border-radius: 6px;
+    font: 12px/1.45 ui-monospace, "DejaVu Sans Mono", monospace; white-space: pre; pointer-events: none; }
+  #overlay.hidden { display: none; }
+  #bar { position: absolute; left: 0; right: 0; bottom: 0; display: flex; gap: 12px; align-items: center;
+    padding: 6px 12px calc(6px + env(safe-area-inset-bottom, 0px)); background: var(--panel); }
+  #status { flex: 1; color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  button, label.btn { background: none; border: 1px solid #39414d; color: var(--fg); border-radius: 5px; padding: 4px 10px; cursor: pointer; font: inherit; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #pin { position: absolute; inset: 0; display: grid; place-content: center; gap: 10px; background: var(--bg); text-align: center; }
+  #pin[hidden] { display: none; }
+  #pin input { font: 28px/1.2 ui-monospace, monospace; letter-spacing: 0.3em; width: 8ch; text-align: center; padding: 6px;
+    background: #11151b; color: var(--fg); border: 1px solid #39414d; border-radius: 6px; }
+</style>
+</head>
+<body>
+<canvas id="v" tabindex="0"></canvas>
+<div id="overlay" class="hidden"></div>
+<form id="pin" hidden>
+  <h2>Pair with this host</h2>
+  <p>Enter the 6-digit PIN shown on the host.</p>
+  <input id="pin-input" inputmode="numeric" autocomplete="one-time-code" maxlength="6" aria-label="PIN">
+  <div><button type="submit">Pair</button></div>
+</form>
+<div id="bar">
+  <div id="status">Loading…</div>
+  <button id="start" type="button">Start audio</button>
+  <label class="btn">Send file<input id="file" type="file" multiple hidden></label>
+  <span style="color: var(--muted)">Ctrl+Alt+Shift: M lock mouse · S stats · F fullscreen · Q quit</span>
+</div>
+<script type="module" src="main.js"></script>
+</body>
+</html>

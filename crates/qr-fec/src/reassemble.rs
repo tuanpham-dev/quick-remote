@@ -1,5 +1,9 @@
 use std::collections::BTreeMap;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+/// Time as a `Duration` since any fixed origin the caller picks (so the
+/// reassembler runs where `Instant` doesn't, e.g. in the browser).
+pub type Time = Duration;
 
 use qr_proto::DecodeError;
 use qr_proto::datagram::{FrameMeta, VideoShardHeader};
@@ -13,7 +17,7 @@ pub struct Frame {
     pub meta: FrameMeta,
     pub au: Vec<u8>,
     /// When the last shard needed to complete it arrived.
-    pub completed: Instant,
+    pub completed: Time,
     /// Data shards rebuilt from parity.
     pub repaired: u32,
 }
@@ -51,10 +55,10 @@ struct Block {
 struct FrameState {
     flags: u8,
     blocks: Vec<Option<Block>>,
-    first_seen: Instant,
+    first_seen: Time,
     received: u32,
     repaired: u32,
-    payload: Option<(Vec<u8>, Instant)>,
+    payload: Option<(Vec<u8>, Time)>,
     emitted: bool,
 }
 
@@ -106,7 +110,7 @@ impl Reassembler {
     }
 
     /// Takes one video datagram. Complete or lost frames come out in order.
-    pub fn push(&mut self, datagram: &[u8], now: Instant) -> Result<Vec<Event>, DecodeError> {
+    pub fn push(&mut self, datagram: &[u8], now: Time) -> Result<Vec<Event>, DecodeError> {
         let (h, payload) = VideoShardHeader::parse(datagram)?;
         self.stats.bytes_rx += datagram.len() as u64;
         self.stats.shards_rx += 1;
@@ -166,11 +170,11 @@ impl Reassembler {
 
     /// Declares overdue frames lost and retires old bookkeeping. Call it
     /// periodically (every few ms) even when no datagrams arrive.
-    pub fn poll(&mut self, now: Instant) -> Vec<Event> {
+    pub fn poll(&mut self, now: Time) -> Vec<Event> {
         self.drain(now)
     }
 
-    fn drain(&mut self, now: Instant) -> Vec<Event> {
+    fn drain(&mut self, now: Time) -> Vec<Event> {
         let mut out = Vec::new();
         loop {
             let ready = matches!(self.frames.get(&self.next), Some(f) if f.payload.is_some());
@@ -207,7 +211,7 @@ impl Reassembler {
                 .frames
                 .range(self.next + 1..)
                 .next()
-                .is_some_and(|(_, later)| now.duration_since(later.first_seen) >= self.deadline);
+                .is_some_and(|(_, later)| now.saturating_sub(later.first_seen) >= self.deadline);
             if overdue {
                 if let Some(f) = self.frames.get(&self.next) {
                     let blocks: Vec<String> = f
@@ -235,7 +239,7 @@ impl Reassembler {
         let horizon = self.deadline * 2;
         while let Some(entry) = self.frames.first_entry() {
             let f = entry.get();
-            if *entry.key() >= self.next || !f.emitted || now.duration_since(f.first_seen) < horizon {
+            if *entry.key() >= self.next || !f.emitted || now.saturating_sub(f.first_seen) < horizon {
                 break;
             }
             let f = entry.remove();
@@ -282,7 +286,7 @@ mod tests {
     fn repairs_up_to_parity_and_loses_beyond() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(7);
         let mut p = Packetizer::new(0, 1200, 0.25);
-        let t0 = Instant::now();
+        let t0 = Duration::from_secs(1);
         for trial in 0..200u32 {
             let len = rng.gen_range(1..200_000);
             let data = au(trial, len);
@@ -330,7 +334,7 @@ mod tests {
     #[test]
     fn in_order_with_loss_after_deadline() {
         let mut p = Packetizer::new(0, 1200, 0.1);
-        let t0 = Instant::now();
+        let t0 = Duration::from_secs(1);
         let mut r = Reassembler::new(0, Duration::from_millis(20));
         let f0 = p.frame(0, 0, &meta(), &au(0, 3000));
         let f1 = p.frame(1, 0, &meta(), &au(1, 3000));
@@ -355,7 +359,7 @@ mod tests {
     #[test]
     fn counts_lost_shards_after_retirement() {
         let mut p = Packetizer::new(0, 1200, 0.5);
-        let t0 = Instant::now();
+        let t0 = Duration::from_secs(1);
         let mut r = Reassembler::new(0, Duration::from_millis(20));
         let d = p.frame(0, 0, &meta(), &au(0, 10_000));
         let total = d.len() as u32;

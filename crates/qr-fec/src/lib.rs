@@ -21,7 +21,7 @@ use std::sync::Arc;
 use reed_solomon_erasure::galois_8::ReedSolomon;
 
 pub use packetize::{Packetizer, ShardPlan, plan};
-pub use reassemble::{Event, Frame, Reassembler, Stats};
+pub use reassemble::{Event, Frame, Reassembler, Stats, Time};
 
 /// Most data shards in one FEC block. Small blocks keep decode cheap and
 /// spread a burst of loss over separate blocks of a large keyframe.

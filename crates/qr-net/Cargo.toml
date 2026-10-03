@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 qr-proto.workspace = true
+qr-pair.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 bytes.workspace = true

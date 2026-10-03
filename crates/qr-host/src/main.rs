@@ -8,6 +8,7 @@ mod outbox;
 mod ratectl;
 mod session;
 mod stream;
+mod web;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -62,6 +63,9 @@ pub struct Args {
     /// Rate-control profile (`auto`, `lan`, `internet`).
     #[arg(long, default_value = "auto")]
     profile: String,
+    /// Serve the web client here (TCP for the page, UDP for WebTransport).
+    #[arg(long)]
+    web_listen: Option<SocketAddr>,
     /// Rendezvous server (`host:port`) for access from the internet.
     #[arg(long)]
     rendezvous: Option<String>,
@@ -121,6 +125,8 @@ pub struct HostCtx {
     pub input: input::Input,
     /// Relay ports allocated for this host: sessions from them are relayed.
     pub relays: Arc<Mutex<Vec<SocketAddr>>>,
+    /// Browser sessions piped through the web gateway.
+    pub web_peers: Arc<web::WebPeers>,
 }
 
 impl HostCtx {
@@ -224,7 +230,43 @@ async fn main() -> Result<()> {
 
     let injector = input::open(&args.input, &args.source).context("opening the input backend")?;
     tracing::info!(backend = injector.name(), "input");
-    let ctx = Arc::new(HostCtx { args, encoders, input: input::Input::new(injector), relays });
+    let web_peers: Arc<web::WebPeers> = Arc::default();
+    if let Some(wl) = args.web_listen {
+        let mut names = vec!["localhost".to_string(), wl.ip().to_string()];
+        names.extend(
+            qr_net::rendezvous::local_candidates(0)
+                .iter()
+                .filter_map(|a| a.parse::<SocketAddr>().ok())
+                .map(|a| a.ip().to_string()),
+        );
+        let cert = web::make_cert(names)?;
+        let hash = base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, cert.hash);
+        let host_addr =
+            SocketAddr::new(if addr.ip().is_unspecified() { "127.0.0.1".parse()? } else { addr.ip() }, addr.port());
+        let gw = Arc::new(web::Gateway {
+            id: web::gateway_identity(&dir, &keystore)?,
+            cert,
+            host_addr,
+            web_keys: Mutex::new(KeyStore::open(&dir.join("web-paired.json"))?),
+            pin: pin.clone(),
+            fixed_pin: args.pin.clone(),
+            limiter: limiter.clone(),
+            peers: web_peers.clone(),
+        });
+        let scheme = if wl.ip().is_loopback() { "http" } else { "https" };
+        let shown = if wl.ip().is_unspecified() {
+            qr_net::rendezvous::local_candidates(wl.port()).first().cloned().unwrap_or(wl.to_string())
+        } else {
+            wl.to_string()
+        };
+        println!("WEB-URL {scheme}://{shown}/#c={hash}");
+        tokio::spawn(async move {
+            if let Err(e) = web::run(gw, wl).await {
+                tracing::error!("web client server: {e:#}");
+            }
+        });
+    }
+    let ctx = Arc::new(HostCtx { args, encoders, input: input::Input::new(injector), relays, web_peers });
     let active: Arc<tokio::sync::Mutex<Option<Active>>> = Arc::default();
     while let Some(incoming) = ep.accept().await {
         let (ctx, id, keystore, pin, limiter, active, name) =

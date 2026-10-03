@@ -20,7 +20,7 @@ fn main() {
                 if i % 40 == 3 {
                     continue;
                 }
-                for e in r.push(x, Instant::now()).unwrap() {
+                for e in r.push(x, t.elapsed()).unwrap() {
                     if let Event::Frame(_) = e {
                         ok += 1;
                     }

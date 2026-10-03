@@ -559,7 +559,7 @@ async fn recv_loop(
             d = conn.read_datagram() => {
                 let d: Bytes = d?;
                 match d.first() {
-                    Some(&kind::VIDEO) => reasm.push(&d, Instant::now()).unwrap_or_default(),
+                    Some(&kind::VIDEO) => reasm.push(&d, qr_net::clock::base().elapsed()).unwrap_or_default(),
                     Some(&kind::AUDIO) => {
                         if let (Some(p), Ok(a)) = (player, AudioPacket::decode(&d)) {
                             p.push(a.seq, &a.data)?;
@@ -575,7 +575,7 @@ async fn recv_loop(
                     _ => Vec::new(),
                 }
             }
-            _ = tick.tick() => reasm.poll(Instant::now()),
+            _ = tick.tick() => reasm.poll(qr_net::clock::base().elapsed()),
         };
         for ev in events {
             match ev {
@@ -587,7 +587,7 @@ async fn recv_loop(
                     need_key = false;
                     {
                         let mut sh = shared.lock().expect("lock");
-                        let complete = instant_to_us(f.completed) as i64;
+                        let complete = f.completed.as_micros() as i64;
                         let off = |t: u64| sh.clock.to_client(t);
                         let t = FrameTimes {
                             capture: off(f.meta.capture_us),

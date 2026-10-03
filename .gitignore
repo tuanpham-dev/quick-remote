@@ -1,5 +1,4 @@
 target/
 node_modules/
-web/dist/
 *.pcap
 /out/

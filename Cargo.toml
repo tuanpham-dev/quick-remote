@@ -14,6 +14,7 @@ qr-fec = { path = "crates/qr-fec" }
 qr-net = { path = "crates/qr-net" }
 qr-media = { path = "crates/qr-media" }
 qr-clip = { path = "crates/qr-clip" }
+qr-pair = { path = "crates/qr-pair" }
 anyhow = "1"
 thiserror = "2"
 bytes = "1"
@@ -28,7 +29,7 @@ sha2 = "0.10"
 rand = "0.8"
 data-encoding = "2"
 mdns-sd = "0.21"
-reed-solomon-erasure = { version = "6", features = ["simd-accel"] }
+reed-solomon-erasure = "6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 clap = { version = "4", features = ["derive"] }

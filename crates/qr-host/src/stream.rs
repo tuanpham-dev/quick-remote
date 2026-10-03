@@ -46,7 +46,15 @@ pub struct VideoStream {
 }
 
 impl VideoStream {
-    pub fn start(id: u8, cfg: &EncodeConfig, rate: RateCtl, conn: quinn::Connection) -> Result<Arc<Self>> {
+    /// `max_datagram` caps video datagrams below the connection's own limit
+    /// (browser sessions, whose WebTransport datagrams are smaller).
+    pub fn start(
+        id: u8,
+        cfg: &EncodeConfig,
+        rate: RateCtl,
+        conn: quinn::Connection,
+        max_datagram: Option<usize>,
+    ) -> Result<Arc<Self>> {
         let (tx, rx) = mpsc::channel::<EncodedFrame>(4);
         let clock = qr_media::ClockMap::new(qr_net::clock::now_us);
         let encoder = Arc::new(Encoder::start(cfg, clock, move |f| {
@@ -74,6 +82,7 @@ impl VideoStream {
             parity.clone(),
             loss.clone(),
             refresh,
+            max_datagram,
         ));
         let s = Arc::new(Self {
             id,
@@ -137,6 +146,7 @@ async fn send_loop(
     parity_permille: Arc<AtomicU32>,
     loss_permille: Arc<AtomicU32>,
     refresh: Refresh,
+    max_datagram: Option<usize>,
 ) {
     let mut still = StillState { last_change: std::time::Instant::now(), refreshing: false, refreshed: false };
     let mut frame_id: u32 = 0;
@@ -161,7 +171,7 @@ async fn send_loop(
             tracing::warn!("peer does not accept datagrams");
             return;
         };
-        pk.max_datagram = max;
+        pk.max_datagram = max.min(max_datagram.unwrap_or(usize::MAX));
         pk.parity = parity_permille.load(Ordering::Relaxed) as f32 / 1000.0;
         pk.loss = loss_permille.load(Ordering::Relaxed) as f32 / 1000.0;
         let is_refresh = still.frame(&f, &refresh, &encoder);

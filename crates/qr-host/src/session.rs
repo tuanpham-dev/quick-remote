@@ -27,15 +27,20 @@ fn is_private(ip: IpAddr) -> bool {
 }
 
 /// LAN when the peer has a private address and the round trip is short.
-pub fn pick_profile(forced: Option<Profile>, conn: &quinn::Connection) -> Profile {
+pub fn pick_profile(forced: Option<Profile>, conn: &quinn::Connection, web: &crate::web::WebPeers) -> Profile {
     if let Some(p) = forced {
         return p;
     }
-    if is_private(conn.remote_address().ip()) && conn.rtt() < Duration::from_millis(5) {
-        Profile::Lan
-    } else {
-        Profile::Internet
-    }
+    // A browser behind the web gateway: judge by its own path.
+    let (ip, rtt) = web
+        .0
+        .lock()
+        .expect("lock")
+        .get(&conn.remote_address().port())
+        .filter(|_| conn.remote_address().ip().is_loopback())
+        .map(|p| (p.addr.ip(), p.rtt))
+        .unwrap_or((conn.remote_address().ip(), conn.rtt()));
+    if is_private(ip) && rtt < Duration::from_millis(5) { Profile::Lan } else { Profile::Internet }
 }
 
 pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) -> Result<()> {
@@ -51,7 +56,7 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
         bail!(text);
     };
 
-    let profile = pick_profile(ctx.args.profile(), &conn);
+    let profile = pick_profile(ctx.args.profile(), &conn, &ctx.web_peers);
     let (width, height, fps) = ctx.display_mode(want_width, want_height, want_refresh);
     tracing::info!(client = %client_name, ?profile, encoder = enc.element, width, height, fps, "session start");
     send(
@@ -100,7 +105,16 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
         bitrate_kbps: rate.target_kbps,
         chroma444: false,
     };
-    let stream = VideoStream::start(0, &cfg, rate, conn.clone())?;
+    // Browser sessions: video datagrams must fit WebTransport's.
+    let max_datagram = ctx
+        .web_peers
+        .0
+        .lock()
+        .expect("lock")
+        .get(&conn.remote_address().port())
+        .filter(|_| conn.remote_address().ip().is_loopback())
+        .map(|p| p.max_datagram);
+    let stream = VideoStream::start(0, &cfg, rate, conn.clone(), max_datagram)?;
     let _audio = match crate::media::start_audio(&ctx, &conn) {
         Ok(a) => a,
         Err(e) => {

@@ -1,0 +1,22 @@
+[package]
+name = "qr-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+qr-proto.workspace = true
+qr-fec.workspace = true
+qr-pair.workspace = true
+sha2.workspace = true
+wasm-bindgen = "=0.2.129"
+
+# spake2 draws randomness through getrandom 0.2, which needs its JS backend
+# in the browser.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+# reed-solomon-erasure → parking_lot → instant needs its browser clock.
+instant = { version = "0.1", features = ["wasm-bindgen"] }

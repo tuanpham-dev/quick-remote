@@ -11,3 +11,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 rand.workspace = true
+
+# The SIMD build compiles C; WebAssembly uses the portable code.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+reed-solomon-erasure = { workspace = true, features = ["simd-accel"] }
