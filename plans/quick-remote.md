@@ -359,24 +359,24 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
 **Goal:** the host serves a browser client with feature parity for video, audio, input, pads, clipboard and files.
 **Checkpoint:** `tests/e2e/run.sh phase3` passes A27 (Chrome full; Firefox smoke ENV-BLOCKED if not installed).
 
-- [ ] **T3.1 — host web server**
+- [x] **T3.1 — host web server**
   - Files: `crates/qr-host/src/web/{mod.rs,wt.rs,https.rs}`
   - Do: `--web-listen ADDR`: HTTPS (axum + tokio-rustls) serves the embedded `web/dist` (rust-embed). WebTransport via `wtransport` on the same port (UDP) with an ECDSA cert valid 13 days, rotated daily, keeping the old one for 24 h. The page URL carries the cert hash in the fragment `#c=<hash>`, and the host prints `WEB-URL`.
   - Depends on: T1.15
   - Done when: Chrome loads the page and opens a WebTransport session.
-- [ ] **T3.2 — TypeScript protocol + conformance**
+- [x] **T3.2 — TypeScript protocol + conformance**
   - Files: `web/package.json`, `web/tsconfig.json`, `web/build.mjs` (esbuild), `web/src/proto.ts`, `web/test/vectors.test.ts`
   - Do: mirror `qr-proto` and check against `conformance/vectors.json` with `node --test`.
   - Depends on: T1.3
   - Done when: `npm test` passes (A32 TypeScript half).
-- [ ] **T3.3 — web pairing**
+- [x] **T3.3 — web pairing**
   - Files: `web/src/pairing.ts`, `crates/qr-host/src/web/auth.rs`
   - Do:
     - SPAKE2 in TypeScript with @noble/curves ed25519, matching the Rust `spake2` crate's M/N constants and transcript. The PIN enrols a WebCrypto P-256 key (non-extractable, in IndexedDB).
     - Later connections: the host sends a 32-byte nonce, and the browser signs `nonce‖host-cert-hash`.
   - Depends on: T3.2, T1.5
   - Done when: a cross-language SPAKE2 test vector passes, and A2 passes from Chrome.
-- [ ] **T3.4 — web media**
+- [x] **T3.4 — web media**
   - Files: `web/src/{video.ts,audio.ts,fec.ts,render.ts}`
   - Do:
     - FEC reassembly in TypeScript (Reed-Solomon over GF(2^16), the same as reed-solomon-simd, compiled to WASM from the `qr-fec` crate with `wasm-bindgen` to avoid a second implementation).
@@ -385,7 +385,7 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
     - Mic: `getUserMedia` → `AudioEncoder` opus.
   - Depends on: T3.1
   - Done when: video and audio play in headless Chrome with GPU flags (per the 2026-07-23 lesson: `--use-angle=swiftshader --enable-unsafe-swiftshader` when no GPU in the QA browser).
-- [ ] **T3.5 — web input, pads, clipboard, files, overlay**
+- [x] **T3.5 — web input, pads, clipboard, files, overlay**
   - Files: `web/src/{input.ts,pads.ts,clipboard.ts,files.ts,overlay.ts,main.ts}`, `web/index.html`
   - Do:
     - `KeyboardEvent.code` → evdev, with Keyboard Lock in fullscreen.
@@ -515,6 +515,7 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
 - T1.22: files go both ways (client `--send-file` and drag and drop; host outbox folder `~/QuickRemote/Outbox`), paced by RTT, with stream priority below video. A25a/b/d pass. A25c (frame rate during transfers) is ENV-BLOCKED: `net.core.rmem_max` is 208 KiB, and the client drops 13–17k UDP packets in each run. `setup-root.sh` now raises it.
 - T1.25 (partial): the still-screen refresh is done (300 ms after the last change, one keyframe at 8× budget) and A12 passes (SSIM 0.9998). A still page also converges without the mode, so A12 doesn't show the refresh's benefit right after motion stops. 4:4:4 needs a 4:4:4 decoder on the client (`avdec_h264` from gstreamer1.0-libav, in setup) plus a stream restart; it isn't wired yet.
 - Phase 2: A4 passes through cone NATs (Direct) and symmetric NATs (Relayed), and A3a/b pass (30k relayed packets, canary never in plaintext). Deviation from T2.3: no wrapping `AsyncUdpSocket`. Hole punches and relay hellos go out on a clone of the endpoint's UDP socket (same port, so the same NAT mapping). Each relay session has its own port, and the relay learns both peers from their `PUNCH_MAGIC ‖ token` hellos, so relayed packets carry no token prefix. Relay ports bind to `--public-ip`, because on a multi-homed server a 0.0.0.0 socket can answer from another address, which NATs drop. The Docker image (A5) is written but ENV-BLOCKED: no access to the docker group.
+- Phase 3: A27 passes in headless Chrome: video at 60 fps via WebCodecs, audio, keys, pointer lock, 3 MiB upload, clipboard host → page, paired reconnect without PIN. Gamepad and Firefox are ENV-BLOCKED. Deviations: (1) the host runs a **web gateway**. It terminates WebTransport, authenticates the browser, and pipes the browser's streams and datagrams to a loopback QUIC session with its own trusted identity, so session code serves both kinds of client. The gateway records each browser's real address, RTT and datagram size for profile choice and shard sizing. (2) SPAKE2 and FEC run in the browser as WebAssembly (`qr-wasm` over a new `qr-pair` crate) instead of a TypeScript re-implementation, and the TypeScript side mirrors only the message codec (checked against the vectors). Still to do: the 13-day WebTransport certificate isn't rotated yet, so a host has to restart within 13 days. The fix is for the page to fetch the current hash and the host to reload its certificate.
 - T1.17/T1.18 (partial): input stream, motion running totals, XTest injector and the `--script` test driver. A19a, A20 and A23 pass (input p95 0.56–0.66 ms). uinput waits on root setup.
 
 ## Open Questions / Risks
