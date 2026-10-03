@@ -2,17 +2,18 @@
 # recovery) and A11 (FEC repairs random loss) on the WAN topology.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 DUR="${A10_SECS:-180}"
-start_host host wanhost --pin 424242 --encoder x264enc --source test:snow --size 1280x720 --fps 60
+RUST_LOG=info,qr_host=debug start_host host wanhost --pin 424242 --encoder x264enc --source test:snow --size 1280x720 --fps 60
 
 st="$LOGDIR/a10.json"
 lat="$LOGDIR/a10-frames.jsonl"
 (
-	sleep $((DUR / 3)); shape host eth0 rate 5mbit delay 25ms loss 0.5% limit 10000
+	sleep $((DUR / 3)); shape host eth0 rate 1mbit delay 25ms loss 0.5% limit 10000
 	sleep $((DUR / 6)); shape host eth0 rate 10mbit delay 25ms loss 0.5% limit 10000
 ) &
+shaper=$!
 client client cli --connect "$IP_host:9450" --pin 424242 --headless --decoder openh264dec \
 	--duration "$DUR" --stats-json "$st" --latency-log "$lat" >"$LOGDIR/a10-client.txt" 2>&1
-wait
+wait "$shaper"
 
 python3 "$(dirname "${BASH_SOURCE[0]}")/frames.py" "$lat" >"$LOGDIR/a10-frames.json"
 gap=$(python3 -c "import json;print(json.load(open('$LOGDIR/a10-frames.json'))['max_gap_ms'])")
@@ -42,7 +43,7 @@ cat "$LOGDIR/a10-verdict.txt"
 v() { python3 -c "import json;d=json.load(open('$LOGDIR/a10-verdict.txt'));print(d['$1'])"; }
 check A10b "bitrate settles below the 10 Mbit/s link and stays within ±35% after 5 s ($(v median_kbps) kbps, $(v stable_share) of seconds in band)" \
 	python3 -c "import sys; sys.exit(0 if $(v median_kbps) <= 10000 and $(v stable_share) >= 0.8 else 1)"
-check A10c "halving the link drops the frame rate first ($(v fps_before) → $(v fps_min_squeezed) fps) and recovers ($(v kbps_after) kbps, $(v fps_after) fps)" \
-	python3 -c "import sys; sys.exit(0 if $(v fps_min_squeezed) < $(v fps_before) and $(v kbps_after) > 1.3 * $(v kbps_squeezed) else 1)"
+check A10c "squeezing the link to 1 Mbit/s drops the frame rate first ($(v fps_before) → $(v fps_min_squeezed) fps) and recovers ($(v kbps_after) kbps, $(v fps_after) fps)" \
+	python3 -c "import sys; sys.exit(0 if $(v fps_min_squeezed) <= 0.6 * $(v fps_before) and $(v kbps_after) > 1.3 * $(v kbps_squeezed) and $(v fps_after) >= 0.9 * $(v fps_before) else 1)"
 check A11a "FEC repairs shards under ~1% loss ($(v fec_repaired) shards repaired, $(v frames_lost) frames lost)" \
 	python3 -c "import sys; sys.exit(0 if $(v fec_repaired) > 0 else 1)"

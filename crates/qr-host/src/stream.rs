@@ -136,7 +136,21 @@ async fn send_loop(
     let mut frame_id: u32 = 0;
     let mut pk = Packetizer::new(stream, 1200, 0.1);
     let buffer = qr_net::endpoint::BUFFER as f64;
-    while let Some(f) = rx.recv().await {
+    let mut recheck = tokio::time::interval(Duration::from_millis(5));
+    loop {
+        let f = tokio::select! {
+            f = rx.recv() => match f {
+                Some(f) => f,
+                None => return,
+            },
+            // While capture is held no frames arrive here, so the queue
+            // has to be re-checked on a timer or the hold never lifts.
+            _ = recheck.tick() => {
+                let fill = 1.0 - conn.datagram_send_buffer_space() as f64 / buffer;
+                encoder.hold(fill > HOLD_FILL);
+                continue;
+            }
+        };
         let Some(max) = conn.max_datagram_size() else {
             tracing::warn!("peer does not accept datagrams");
             return;

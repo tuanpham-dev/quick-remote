@@ -137,8 +137,15 @@ impl RateCtl {
                 } else if self.may_increase(now) && rx_kbps as f64 >= self.target_kbps as f64 * 0.6
                 {
                     // Only grow when the stream actually uses the budget;
-                    // a still screen sends little and proves nothing.
-                    self.target_kbps = ((self.target_kbps as f64 * 1.08f64.powf(dt)) as u32 + 1)
+                    // a still screen sends little and proves nothing. Grow
+                    // 8%/s near the last congestion point, 50%/s once the
+                    // link has been quiet for 3 s (recovering from a squeeze
+                    // at 8%/s alone takes ~40 s).
+                    let quiet = self
+                        .hold_increase_until
+                        .is_none_or(|t| now.duration_since(t) >= Duration::from_millis(2500));
+                    let g: f64 = if quiet { 1.5 } else { 1.08 };
+                    self.target_kbps = ((self.target_kbps as f64 * g.powf(dt)) as u32 + 1)
                         .min(self.limits.max_kbps);
                 }
             }

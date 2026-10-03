@@ -87,6 +87,10 @@ pub struct Encoder {
     ctl: Arc<Control>,
     pub codec: Codec,
     pub element: &'static str,
+    /// Frame rate the encoder was configured for (the source rate).
+    source_fps: u32,
+    /// (target kbit/s, frame-rate cap) last requested.
+    rate: std::sync::Mutex<(u32, u32)>,
 }
 
 fn source_desc(s: &Source, w: u32, h: u32, fps: u32) -> String {
@@ -390,17 +394,34 @@ impl Encoder {
             ctl,
             codec: e.codec,
             element: e.element,
+            source_fps: cfg.fps.max(1),
+            rate: std::sync::Mutex::new((cfg.bitrate_kbps, cfg.fps.max(1))),
         })
     }
 
     pub fn set_bitrate(&self, kbps: u32) {
-        set_bitrate_prop(&self.enc, self.family, kbps.max(100));
+        let mut r = self.rate.lock().expect("lock");
+        r.0 = kbps;
+        self.apply_rate(*r);
     }
 
     /// Caps the encoded frame rate (0 = no cap).
     pub fn set_max_fps(&self, fps: u32) {
         let us = if fps == 0 { 0 } else { 1_000_000 / fps as u64 };
         self.ctl.min_interval_us.store(us, Ordering::Relaxed);
+        let mut r = self.rate.lock().expect("lock");
+        r.1 = if fps == 0 { self.source_fps } else { fps.min(self.source_fps) };
+        self.apply_rate(*r);
+    }
+
+    /// Encoders budget bits per frame from the configured (source) frame
+    /// rate, and frames dropped before them don't change that: at a 5 fps
+    /// cap on a 60 fps source each frame would get 1/12 of its share. So
+    /// the encoder is told `target × source_fps / cap`, which makes its
+    /// per-frame budget `target / cap`.
+    fn apply_rate(&self, (kbps, cap): (u32, u32)) {
+        let scaled = (kbps as u64 * self.source_fps as u64 / cap.max(1) as u64) as u32;
+        set_bitrate_prop(&self.enc, self.family, scaled.max(100));
     }
 
     /// While held, captures are skipped before encoding: the reference chain
