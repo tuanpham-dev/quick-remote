@@ -197,6 +197,8 @@ pub struct ConnectOpts {
     pub mic: Option<AudioSource>,
     /// Where files from the host are saved.
     pub recv_dir: std::path::PathBuf,
+    /// X display whose clipboard is synced with the host (`None`: off).
+    pub clipboard: Option<String>,
 }
 
 /// Called with every decoded frame (window mode renders it).
@@ -397,6 +399,31 @@ pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, 
         }));
     }
 
+    let clip_tx = match &o.clipboard {
+        Some(display) => match qr_clip::spawn(display) {
+            Ok((tx, rx)) => {
+                let ctl = ctl.clone();
+                std::thread::spawn(move || {
+                    use qr_proto::msg::ClipKind;
+                    while let Ok(c) = rx.recv() {
+                        ctl(match c {
+                            qr_clip::Content::Text(t) => {
+                                Msg::Clipboard { kind: ClipKind::Text as u8, data: t.into_bytes() }
+                            }
+                            qr_clip::Content::Png(p) => Msg::Clipboard { kind: ClipKind::Png as u8, data: p },
+                        });
+                    }
+                });
+                Some(tx)
+            }
+            Err(e) => {
+                tracing::warn!("clipboard is off: {e:#}");
+                None
+            }
+        },
+        None => None,
+    };
+
     // Control receive loop.
     {
         let (shared, end_tx, files, ctl) = (shared.clone(), end_tx.clone(), files.clone(), ctl.clone());
@@ -406,6 +433,17 @@ pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, 
                 if let Ok(m) = &m
                     && files.on_control(m, &ctl)
                 {
+                    continue;
+                }
+                if let Ok(Msg::Clipboard { kind, data }) = &m {
+                    if let Some(tx) = &clip_tx {
+                        let c = if *kind == qr_proto::msg::ClipKind::Png as u8 {
+                            qr_clip::Content::Png(data.clone())
+                        } else {
+                            qr_clip::Content::Text(String::from_utf8_lossy(data).into_owned())
+                        };
+                        let _ = tx.send(qr_clip::Command::Set(c));
+                    }
                     continue;
                 }
                 match m {

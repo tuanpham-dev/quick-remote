@@ -1,6 +1,7 @@
 //! QuickRemote host: shares this machine's screen (or a virtual display)
 //! with paired clients.
 
+mod clipboard;
 mod input;
 mod media;
 mod outbox;
@@ -119,9 +120,7 @@ pub struct HostCtx {
 
 impl HostCtx {
     pub fn files_dir(&self) -> PathBuf {
-        self.args.files_dir.clone().unwrap_or_else(|| {
-            dirs_home().join("Downloads").join("QuickRemote")
-        })
+        self.args.files_dir.clone().unwrap_or_else(|| dirs_home().join("Downloads").join("QuickRemote"))
     }
 
     pub fn outbox_dir(&self) -> PathBuf {

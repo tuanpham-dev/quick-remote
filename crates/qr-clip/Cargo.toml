@@ -1,0 +1,15 @@
+[package]
+name = "qr-clip"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+tracing.workspace = true
+sha2.workspace = true
+x11rb = { version = "0.13", features = ["xfixes"] }
+
+[[bin]]
+name = "qr-clipctl"
+path = "src/bin/clipctl.rs"

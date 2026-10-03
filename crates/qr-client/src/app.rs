@@ -539,6 +539,7 @@ async fn connect_once(
         audio_out: Some(qr_media::audio::AudioSink::Default),
         mic: None,
         recv_dir: std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default().join("Downloads"),
+        clipboard: std::env::var("DISPLAY").ok(),
     };
     let c = Arc::new(session::connect(&cfg.id, &cfg.keystore, opts, sink).await?);
     let mut ended = c.ended.clone();

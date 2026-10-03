@@ -71,6 +71,12 @@ struct Args {
     /// Where files from the host are saved (default ~/Downloads).
     #[arg(long)]
     recv_dir: Option<PathBuf>,
+    /// X display whose clipboard is synced (default: $DISPLAY).
+    #[arg(long)]
+    clipboard_display: Option<String>,
+    /// Don't sync the clipboard.
+    #[arg(long)]
+    no_clipboard: bool,
     /// Host audio output: `default`, `none`, `file:<wav>`.
     #[arg(long, default_value = "default")]
     audio_out: String,
@@ -243,6 +249,11 @@ async fn cli(args: Args) -> Result<()> {
         audio_out: audio_out(&args.audio_out),
         mic: args.mic.as_deref().map(mic_source),
         recv_dir: recv_dir(&args),
+        clipboard: if args.no_clipboard {
+            None
+        } else {
+            args.clipboard_display.clone().or_else(|| std::env::var("DISPLAY").ok())
+        },
     };
     let c = session::connect(&id, &keystore, opts, sink).await?;
     eprintln!("connected to {} ({})", c.host_name, c.host_id);

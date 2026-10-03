@@ -124,10 +124,10 @@ impl Files {
             *n += 2;
             id
         };
-        self.outgoing.lock().expect("lock").insert(
-            id,
-            Outgoing { path: path.to_path_buf(), name: name.clone(), size: meta.len(), cancel: None },
-        );
+        self.outgoing
+            .lock()
+            .expect("lock")
+            .insert(id, Outgoing { path: path.to_path_buf(), name: name.clone(), size: meta.len(), cancel: None });
         control(Msg::FileOffer { id, name, size: meta.len(), sha256 });
         Ok(id)
     }
@@ -334,8 +334,8 @@ impl Pacer {
                 self.rate_bps *= 1.25;
             }
         }
-        self.budget = (self.budget + now.duration_since(self.last).as_secs_f64() * self.rate_bps)
-            .min(self.rate_bps * 0.01);
+        self.budget =
+            (self.budget + now.duration_since(self.last).as_secs_f64() * self.rate_bps).min(self.rate_bps * 0.01);
         self.last = now;
         if self.budget < 0.0 {
             let wait = std::time::Duration::from_secs_f64(-self.budget / self.rate_bps);

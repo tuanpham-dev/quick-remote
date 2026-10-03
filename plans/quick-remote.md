@@ -266,12 +266,12 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
   - Done when: A22 passes at the evdev level. Delivery into apps in the virtual display is per the Open Questions decision.
 
 #### Milestone 1e — desktop features and quality
-- [ ] **T1.21 — clipboard**
+- [x] **T1.21 — clipboard**
   - Files: `crates/qr-host/src/clipboard.rs`, `crates/qr-client/src/clipboard.rs`
   - Do: host on the X11 selection (x11rb, XFixes selection notify; targets `UTF8_STRING`, `image/png`). Client uses arboard (text + image → PNG). Loop suppression by content hash. A per-host toggle is stored in the client's key store entry.
   - Depends on: T1.15
   - Done when: A24 passes.
-- [ ] **T1.22 — file transfer**
+- [x] **T1.22 — file transfer**
   - Files: `crates/qr-net/src/files.rs`, `crates/qr-host/src/files.rs`, `crates/qr-client/src/files.rs`
   - Do:
     - `FileOffer{id,name,size,sha256}` → `FileAccept` → a dedicated uni stream per file with 256 KiB chunks.
@@ -511,6 +511,8 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
 - T1.24: the encoder bitrate is scaled by source fps ÷ capped fps; capture hold is re-checked every 5 ms; growth is 50%/s after 3 quiet seconds. A10 and A11 pass on the 60–90 s runs; the full 180 s run is still to do.
 - T1.14 (partial): headless and window clients decode and render (offscreen renderer test passes). Measured on loopback, VA-API → VA-API 1080p60 is about 10 ms from capture to decoded picture.
 - T1.13/T1.16 (partial): Opus audio both ways with PLC. Mic WAV → host WAV correlation is 0.997 on loopback. Audio latency estimate is about 18 ms. The private PipeWire sink/source arrives with the virtual display.
+- T1.21: clipboard is a shared `qr-clip` crate (X11 CLIPBOARD via XFixes, INCR both ways) used by host and client, so PNGs stay byte-identical. A24 passes 3/3. Windows/macOS/Wayland clients need their own backend later (T4.5 / Phase 5).
+- T1.22: files go both ways (client `--send-file` and drag and drop; host outbox folder `~/QuickRemote/Outbox`), paced by RTT, with stream priority below video. A25a/b/d pass. A25c (frame rate during transfers) is ENV-BLOCKED: `net.core.rmem_max` is 208 KiB, and the client drops 13–17k UDP packets in each run. `setup-root.sh` now raises it.
 - T1.17/T1.18 (partial): input stream, motion running totals, XTest injector and the `--script` test driver. A19a, A20 and A23 pass (input p95 0.56–0.66 ms). uinput waits on root setup.
 
 ## Open Questions / Risks

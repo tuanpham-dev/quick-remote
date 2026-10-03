@@ -2775,6 +2775,7 @@ dependencies = [
  "egui-wgpu",
  "egui-winit",
  "pollster",
+ "qr-clip",
  "qr-fec",
  "qr-media",
  "qr-net",
@@ -2787,6 +2788,16 @@ dependencies = [
  "tracing-subscriber",
  "wgpu",
  "winit",
+]
+
+[[package]]
+name = "qr-clip"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "sha2",
+ "tracing",
+ "x11rb",
 ]
 
 [[package]]
@@ -2807,6 +2818,7 @@ dependencies = [
  "bytes",
  "clap",
  "libc",
+ "qr-clip",
  "qr-fec",
  "qr-media",
  "qr-net",

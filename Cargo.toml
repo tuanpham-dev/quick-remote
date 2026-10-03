@@ -13,6 +13,7 @@ qr-proto = { path = "crates/qr-proto" }
 qr-fec = { path = "crates/qr-fec" }
 qr-net = { path = "crates/qr-net" }
 qr-media = { path = "crates/qr-media" }
+qr-clip = { path = "crates/qr-clip" }
 anyhow = "1"
 thiserror = "2"
 bytes = "1"

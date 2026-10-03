@@ -37,4 +37,4 @@ client() {
 }
 
 # Last value of a JSON field across a stats file.
-stat() { tail -1 "$1" | sed -E "s/.*\"$2\":\"?([^,\"}]*).*/\1/"; }
+jstat() { tail -1 "$1" | sed -E "s/.*\"$2\":\"?([^,\"}]*).*/\1/"; }

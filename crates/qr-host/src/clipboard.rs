@@ -1,0 +1,44 @@
+//! Host clipboard ↔ client, for X11 displays (CLIPBOARD selection).
+
+use std::sync::mpsc;
+
+use qr_clip::{Command, Content};
+use qr_proto::Msg;
+use qr_proto::msg::ClipKind;
+
+use crate::HostCtx;
+
+pub struct Clipboard {
+    tx: mpsc::Sender<Command>,
+}
+
+/// Starts clipboard sync for an X11 source; local changes go to the client.
+pub fn start(ctx: &HostCtx, ctl: qr_net::files::Control) -> Option<Clipboard> {
+    let display = ctx.args.source.strip_prefix("x11:")?;
+    let (tx, rx) = match qr_clip::spawn(display) {
+        Ok(x) => x,
+        Err(e) => {
+            tracing::warn!("clipboard is off: {e:#}");
+            return None;
+        }
+    };
+    std::thread::spawn(move || {
+        while let Ok(c) = rx.recv() {
+            let m = match c {
+                Content::Text(t) => Msg::Clipboard { kind: ClipKind::Text as u8, data: t.into_bytes() },
+                Content::Png(p) => Msg::Clipboard { kind: ClipKind::Png as u8, data: p },
+            };
+            ctl(m);
+        }
+    });
+    Some(Clipboard { tx })
+}
+
+pub fn from_client(c: &Clipboard, kind: u8, data: &[u8]) {
+    let content = if kind == ClipKind::Png as u8 {
+        Content::Png(data.to_vec())
+    } else {
+        Content::Text(String::from_utf8_lossy(data).into_owned())
+    };
+    let _ = c.tx.send(Command::Set(content));
+}

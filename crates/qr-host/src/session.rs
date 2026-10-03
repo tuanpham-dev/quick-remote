@@ -123,6 +123,7 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
     let files = qr_net::files::Files::new(conn.clone(), ctx.files_dir(), 2);
     let uni_task = tokio::spawn(uni_streams(ctx.clone(), conn.clone(), files.clone(), ctl.clone()));
     let outbox_task = tokio::spawn(crate::outbox::run(ctx.outbox_dir(), files.clone(), ctl.clone()));
+    let clipboard = crate::clipboard::start(&ctx, ctl.clone());
     send(
         &control_tx,
         &Msg::StreamStarted {
@@ -182,7 +183,7 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
         })
     };
 
-    let result = control_loop(&conn, &mut control_rx, &control_tx, &stream, &files, &ctl).await;
+    let result = control_loop(&conn, &mut control_rx, &control_tx, &stream, &files, &ctl, clipboard.as_ref()).await;
     ctl_writer.abort();
     outbox_task.abort();
     stats_task.abort();
@@ -200,10 +201,17 @@ async fn control_loop(
     stream: &Arc<VideoStream>,
     files: &Arc<qr_net::files::Files>,
     ctl: &qr_net::files::Control,
+    clipboard: Option<&crate::clipboard::Clipboard>,
 ) -> Result<()> {
     loop {
         let m = rx.recv().await?;
         if files.on_control(&m, ctl) {
+            continue;
+        }
+        if let Msg::Clipboard { kind, data } = &m {
+            if let Some(c) = clipboard {
+                crate::clipboard::from_client(c, *kind, data);
+            }
             continue;
         }
         match m {
