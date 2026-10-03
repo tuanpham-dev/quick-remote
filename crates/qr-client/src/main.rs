@@ -23,6 +23,10 @@ struct Args {
     /// Host address (`ip:port`) or host ID (`qr-xxxx-xxxx-xxxxx`).
     #[arg(long)]
     connect: Option<String>,
+    /// Rendezvous server (`host[:port]`) for reaching a host by ID over the
+    /// internet.
+    #[arg(long)]
+    rendezvous: Option<String>,
     /// PIN shown on the host (first connection only).
     #[arg(long)]
     pin: Option<String>,
@@ -152,32 +156,55 @@ async fn list(keystore: &KeyStore, secs: f32) -> Result<()> {
 
 /// Resolves `--connect`: an address, or a host ID via mDNS and then the
 /// last known address.
-pub async fn resolve(target: &str, keystore: &KeyStore) -> Result<(SocketAddr, Option<qr_net::Fingerprint>)> {
+fn fp_of(p: &qr_net::keystore::Peer) -> Option<qr_net::Fingerprint> {
+    let b: Vec<u8> = (0..p.fingerprint.len())
+        .step_by(2)
+        .filter_map(|i| p.fingerprint.get(i..i + 2).and_then(|h| u8::from_str_radix(h, 16).ok()))
+        .collect();
+    b.try_into().ok()
+}
+
+async fn lookup_server(s: &str) -> Result<SocketAddr> {
+    let s = if s.contains(':') { s.to_string() } else { format!("{s}:4500") };
+    tokio::net::lookup_host(&s).await?.next().ok_or_else(|| anyhow!("no address for {s}"))
+}
+
+/// Resolves `--connect`. An address is used as is. A host ID is looked
+/// for on the LAN first (mDNS, 1.5 s), then through the rendezvous server
+/// (`--rendezvous`, or the one the host reported when paired), then at its
+/// last known address.
+pub async fn resolve(
+    target: &str,
+    keystore: &KeyStore,
+    rendezvous: Option<&str>,
+) -> Result<(session::Target, Option<qr_net::Fingerprint>)> {
+    use session::Target;
     if target.starts_with("qr-") {
         let peer = keystore.by_host_id(target);
-        let fp = peer.and_then(|p| {
-            let b: Vec<u8> = (0..p.fingerprint.len())
-                .step_by(2)
-                .filter_map(|i| u8::from_str_radix(&p.fingerprint[i..i + 2], 16).ok())
-                .collect();
-            b.try_into().ok()
-        });
-        let (_b, mut rx) = Browser::start()?;
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
-        while let Ok(Some(d)) = tokio::time::timeout_at(deadline, rx.recv()).await {
-            if let Discovery::Up(h) = d
-                && h.host_id == target
-                && let Some(a) = h.addrs.first()
-            {
-                return Ok((*a, fp));
+        let fp = peer.and_then(fp_of);
+        if let Ok((_b, mut rx)) = Browser::start() {
+            let deadline = tokio::time::Instant::now() + Duration::from_millis(1500);
+            while let Ok(Some(d)) = tokio::time::timeout_at(deadline, rx.recv()).await {
+                if let Discovery::Up(h) = d
+                    && h.host_id == target
+                    && let Some(a) = h.addrs.first()
+                {
+                    return Ok((Target::Addr(*a), fp));
+                }
             }
+        }
+        let server =
+            rendezvous.map(str::to_string).or_else(|| peer.map(|p| p.rendezvous.clone()).filter(|s| !s.is_empty()));
+        if let Some(server) = server {
+            let server = lookup_server(&server).await?;
+            return Ok((Target::Rendezvous { server, host_id: target.to_string() }, fp));
         }
         if let Some(p) = peer
             && let Ok(a) = p.last_addr.parse()
         {
-            return Ok((a, fp));
+            return Ok((Target::Addr(a), fp));
         }
-        bail!("The host {target} isn't on this network and has no known address.");
+        bail!("The host {target} isn't on this network, and no rendezvous server is known for it (use --rendezvous).");
     }
     let addr = if target.contains(':') { target.to_string() } else { format!("{target}:9450") };
     let a = addr
@@ -185,14 +212,8 @@ pub async fn resolve(target: &str, keystore: &KeyStore) -> Result<(SocketAddr, O
         .with_context(|| format!("resolving {addr}"))?
         .next()
         .ok_or_else(|| anyhow!("no address for {addr}"))?;
-    let fp = keystore.peers.iter().find(|p| p.last_addr == a.to_string()).and_then(|p| {
-        let b: Vec<u8> = (0..p.fingerprint.len())
-            .step_by(2)
-            .filter_map(|i| u8::from_str_radix(&p.fingerprint[i..i + 2], 16).ok())
-            .collect();
-        b.try_into().ok()
-    });
-    Ok((a, fp))
+    let fp = keystore.peers.iter().find(|p| p.last_addr == a.to_string()).and_then(fp_of);
+    Ok((Target::Addr(a), fp))
 }
 
 fn main() -> Result<()> {
@@ -221,6 +242,7 @@ fn main() -> Result<()> {
         name,
         connect: args.connect.clone(),
         pin: args.pin.clone(),
+        rendezvous: args.rendezvous.clone(),
     })
 }
 
@@ -234,7 +256,7 @@ async fn cli(args: Args) -> Result<()> {
         return list(&keystore.lock().expect("lock"), args.list_secs).await;
     }
     let target = args.connect.clone().ok_or_else(|| anyhow!("give --connect ADDR|ID, or --list"))?;
-    let (addr, expect_fp) = resolve(&target, &keystore.lock().expect("lock")).await?;
+    let (target, expect_fp) = resolve(&target, &keystore.lock().expect("lock"), args.rendezvous.as_deref()).await?;
     qr_media::init()?;
     let decoders = tokio::task::spawn_blocking(qr_media::probe::decoders).await??;
     anyhow::ensure!(!decoders.is_empty(), "no working video decoder found");
@@ -250,7 +272,7 @@ async fn cli(args: Args) -> Result<()> {
         }
     });
     let opts = session::ConnectOpts {
-        addr,
+        target,
         expect_fp,
         pin: args.pin.clone(),
         name,

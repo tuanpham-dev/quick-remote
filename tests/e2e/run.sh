@@ -15,6 +15,10 @@ phase1)
 	[[ -f "$here/a6.sh" ]] && run lan a6
 	[[ -f "$here/a10_a11.sh" ]] && run wan a10_a11
 	;;
+phase2)
+	NAT_MODE=cone run nat-cone a4
+	NAT_MODE=sym run nat-sym a4
+	;;
 *) run "${2:-lan}" "$1" ;;
 esac
 echo "--- summary ($LOGDIR)"

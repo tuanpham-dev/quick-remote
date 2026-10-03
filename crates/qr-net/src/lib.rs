@@ -8,6 +8,7 @@ pub mod files;
 pub mod identity;
 pub mod keystore;
 pub mod pairing;
+pub mod rendezvous;
 pub mod session;
 pub mod tls;
 pub mod trace;

@@ -1,0 +1,14 @@
+services:
+  relay:
+    build:
+      context: ..
+      dockerfile: crates/qr-relay/Dockerfile
+    command: ["--public-ip", "${QR_PUBLIC_IP:?set QR_PUBLIC_IP to the server's public address}"]
+    ports:
+      - "4500:4500/udp"
+      - "40000-40999:40000-40999/udp"
+    volumes:
+      - relay-identity:/var/lib/quickremote
+    restart: unless-stopped
+volumes:
+  relay-identity:

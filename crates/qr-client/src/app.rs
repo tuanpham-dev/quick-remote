@@ -59,6 +59,7 @@ pub struct Config {
     pub name: String,
     pub connect: Option<String>,
     pub pin: Option<String>,
+    pub rendezvous: Option<String>,
 }
 
 pub struct App {
@@ -514,9 +515,9 @@ async fn connect_once(
     slot: Arc<Mutex<Option<(DecodedFrame, FrameTimes)>>>,
     proxy: EventLoopProxy<UserEvent>,
 ) -> Result<Arc<Connected>> {
-    let (addr, expect_fp) = {
+    let (target, expect_fp) = {
         let ks = cfg.keystore.lock().expect("lock").peers.clone();
-        crate::resolve(target, &KeyStore::from_peers(ks)).await?
+        crate::resolve(target, &KeyStore::from_peers(ks), cfg.rendezvous.as_deref()).await?
     };
     let p2 = proxy.clone();
     let sink: session::FrameSink = Arc::new(move |f, t| {
@@ -525,7 +526,7 @@ async fn connect_once(
     });
     let want = size.map(|s| (s.width as u16, s.height as u16, 0)).unwrap_or((0, 0, 0));
     let opts = ConnectOpts {
-        addr,
+        target,
         expect_fp,
         pin,
         name: cfg.name.clone(),

@@ -182,8 +182,20 @@ impl Drop for Connected {
     }
 }
 
+/// Where the host is.
+#[derive(Debug, Clone)]
+pub enum Target {
+    Addr(SocketAddr),
+    /// By host ID through a rendezvous server (direct after hole punching,
+    /// or relayed).
+    Rendezvous {
+        server: SocketAddr,
+        host_id: String,
+    },
+}
+
 pub struct ConnectOpts {
-    pub addr: SocketAddr,
+    pub target: Target,
     pub expect_fp: Option<Fingerprint>,
     pub pin: Option<String>,
     pub name: String,
@@ -205,9 +217,19 @@ pub struct ConnectOpts {
 pub type FrameSink = Arc<dyn Fn(DecodedFrame, FrameTimes) + Send + Sync>;
 
 pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, sink: FrameSink) -> Result<Connected> {
-    let bind: SocketAddr = if o.addr.is_ipv6() { "[::]:0".parse()? } else { "0.0.0.0:0".parse()? };
-    let ep = endpoint::endpoint(bind, id, false, &[ALPN])?;
-    let conn = ep.connect(o.addr, "quickremote")?.await.with_context(|| format!("connecting to {}", o.addr))?;
+    let v6 = match &o.target {
+        Target::Addr(a) => a.is_ipv6(),
+        Target::Rendezvous { server, .. } => server.is_ipv6(),
+    };
+    let bind: SocketAddr = if v6 { "[::]:0".parse()? } else { "0.0.0.0:0".parse()? };
+    let (ep, raw) = endpoint::endpoint_with_raw(bind, id, false, &[ALPN])?;
+    let (conn, via) = match &o.target {
+        Target::Addr(a) => (ep.connect(*a, "quickremote")?.await.with_context(|| format!("connecting to {a}"))?, None),
+        Target::Rendezvous { server, host_id } => {
+            let (c, p) = qr_net::rendezvous::client_connect(&ep, &raw, *server, id, host_id).await?;
+            (c, Some(p))
+        }
+    };
     let caps = qr_media::probe::decoder_caps(&o.decoders);
     let hello = Msg::Hello {
         major: PROTO_MAJOR,
@@ -244,10 +266,14 @@ pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, 
             Msg::SessionStart { profile, path, .. } => {
                 let mut sh = shared.lock().expect("lock");
                 sh.stats.profile = if profile == 1 { "LAN" } else { "Internet" }.into();
-                sh.stats.path = match path {
-                    1 => "LAN",
-                    2 => "Direct",
-                    _ => "Relayed",
+                sh.stats.path = match via {
+                    Some(qr_net::rendezvous::Path::Relayed) => "Relayed",
+                    Some(qr_net::rendezvous::Path::Direct) => "Direct",
+                    None => match path {
+                        1 => "LAN",
+                        2 => "Direct",
+                        _ => "Relayed",
+                    },
                 }
                 .into();
             }

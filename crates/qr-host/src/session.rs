@@ -58,7 +58,13 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
         &control_tx,
         &Msg::SessionStart {
             profile: profile as u8,
-            path: if profile == Profile::Lan { PathKind::Lan } else { PathKind::Direct } as u8,
+            path: if ctx.relays.lock().expect("lock").contains(&conn.remote_address()) {
+                PathKind::Relayed
+            } else if profile == Profile::Lan {
+                PathKind::Lan
+            } else {
+                PathKind::Direct
+            } as u8,
             modes: mode::AUDIO | mode::CLIPBOARD,
         },
     )

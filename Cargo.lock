@@ -2885,6 +2885,17 @@ version = "0.1.0"
 [[package]]
 name = "qr-relay"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "qr-net",
+ "qr-proto",
+ "quinn",
+ "rand 0.8.8",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "quick-error"

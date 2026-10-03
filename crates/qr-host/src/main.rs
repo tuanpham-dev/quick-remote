@@ -62,6 +62,9 @@ pub struct Args {
     /// Rate-control profile (`auto`, `lan`, `internet`).
     #[arg(long, default_value = "auto")]
     profile: String,
+    /// Rendezvous server (`host:port`) for access from the internet.
+    #[arg(long)]
+    rendezvous: Option<String>,
     /// Use this PIN instead of a random one (tests).
     #[arg(long)]
     pin: Option<String>,
@@ -116,6 +119,8 @@ pub struct HostCtx {
     pub args: Args,
     pub encoders: Vec<EncoderInfo>,
     pub input: input::Input,
+    /// Relay ports allocated for this host: sessions from them are relayed.
+    pub relays: Arc<Mutex<Vec<SocketAddr>>>,
 }
 
 impl HostCtx {
@@ -182,8 +187,22 @@ async fn main() -> Result<()> {
     let pin = Arc::new(Mutex::new(args.pin.clone().unwrap_or_else(new_pin)));
     let limiter = Arc::new(Mutex::new(PinLimiter::default()));
 
-    let ep = endpoint::endpoint(args.listen, &id, true, &[ALPN])?;
+    let (ep, raw) = endpoint::endpoint_with_raw(args.listen, &id, true, &[ALPN])?;
     let addr = ep.local_addr()?;
+    let relays: Arc<Mutex<Vec<SocketAddr>>> = Arc::default();
+    if let Some(server) = &args.rendezvous {
+        let server: SocketAddr =
+            tokio::net::lookup_host(server).await?.next().with_context(|| format!("resolving {server}"))?;
+        let (reg_tx, mut reg_rx) = tokio::sync::watch::channel(None);
+        tokio::spawn(qr_net::rendezvous::host_loop(ep.clone(), raw, server, id.clone(), relays.clone(), reg_tx));
+        tokio::spawn(async move {
+            while reg_rx.changed().await.is_ok() {
+                if let Some(observed) = reg_rx.borrow().clone() {
+                    println!("REGISTERED {observed}");
+                }
+            }
+        });
+    }
     let _mdns = if args.no_mdns {
         None
     } else {
@@ -205,7 +224,7 @@ async fn main() -> Result<()> {
 
     let injector = input::open(&args.input, &args.source).context("opening the input backend")?;
     tracing::info!(backend = injector.name(), "input");
-    let ctx = Arc::new(HostCtx { args, encoders, input: input::Input::new(injector) });
+    let ctx = Arc::new(HostCtx { args, encoders, input: input::Input::new(injector), relays });
     let active: Arc<tokio::sync::Mutex<Option<Active>>> = Arc::default();
     while let Some(incoming) = ep.accept().await {
         let (ctx, id, keystore, pin, limiter, active, name) =
@@ -219,7 +238,8 @@ async fn main() -> Result<()> {
                 }
             };
             let peer = conn.remote_address();
-            let cfg = HostConfig { id: &id, name: &name, rendezvous: "" };
+            let rv = ctx.args.rendezvous.clone().unwrap_or_default();
+            let cfg = HostConfig { id: &id, name: &name, rendezvous: &rv };
             let current_pin = pin.lock().expect("lock").clone();
             let mut hs = match host_handshake(&conn, &cfg, &keystore, &current_pin, &limiter).await {
                 Ok(hs) => hs,

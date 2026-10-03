@@ -120,10 +120,23 @@ pub fn client_config(id: Option<&Identity>, alpn: &[&[u8]]) -> Result<quinn::Cli
 /// An endpoint that accepts (when `server` is set) and connects, with the
 /// device identity as its certificate both ways.
 pub fn endpoint(addr: SocketAddr, id: &Identity, server: bool, alpn: &[&[u8]]) -> Result<quinn::Endpoint> {
+    Ok(endpoint_with_raw(addr, id, server, alpn)?.0)
+}
+
+/// Like [`endpoint`], also returning a handle to the same UDP socket for
+/// raw packets (NAT hole punching and relay hellos), so they leave from
+/// the endpoint's own port and open the NAT mapping QUIC will use.
+pub fn endpoint_with_raw(
+    addr: SocketAddr,
+    id: &Identity,
+    server: bool,
+    alpn: &[&[u8]],
+) -> Result<(quinn::Endpoint, Arc<UdpSocket>)> {
     let socket = bind_socket(addr)?;
+    let raw = Arc::new(socket.try_clone()?);
     let server_cfg = if server { Some(server_config(id, alpn)?) } else { None };
     let mut ep =
         quinn::Endpoint::new(quinn::EndpointConfig::default(), server_cfg, socket, Arc::new(quinn::TokioRuntime))?;
     ep.set_default_client_config(client_config(Some(id), alpn)?);
-    Ok(ep)
+    Ok((ep, raw))
 }

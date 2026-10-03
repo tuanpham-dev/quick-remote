@@ -321,12 +321,12 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
 **Goal:** a paired client reaches a host by ID across NATs, direct or relayed, end-to-end encrypted.
 **Checkpoint:** `tests/e2e/run.sh phase2` passes A3, A4, A5, A9-internet (A10 through NAT).
 
-- [ ] **T2.1 — rendezvous protocol**
+- [x] **T2.1 — rendezvous protocol**
   - Files: `crates/qr-proto/src/rendezvous.rs`, `docs/protocol.md`
   - Do: ALPN `qr-rv/1` messages: `Register{host_id, cert, sig(nonce)}`, `Registered{observed_addr}`, `Lookup{host_id, client_local_addrs}`, `Introduce{peer_observed, peer_locals, punch_at_ms, session_token}`, `RelayRequest{session_token}`, `RelayAllocated{relay_addr}`, `Error`.
   - Depends on: T1.2
   - Done when: codec round-trip tests and conformance vectors are added.
-- [ ] **T2.2 — qr-relay server**
+- [x] **T2.2 — qr-relay server**
   - Files: `crates/qr-relay/src/{main.rs,registry.rs,relay.rs}`, `crates/qr-relay/Dockerfile`, `deploy/docker-compose.yml`
   - Do:
     - quinn server on UDP 4500. A registry of host_id → (connection, observed addr, locals) with signature-verified registration.
@@ -341,7 +341,7 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
   - Do: a quinn `AsyncUdpSocket` wrapper over tokio UDP that (a) exposes `send_raw(addr, bytes)`, (b) drops inbound packets starting with the 8-byte punch magic `QRPUNCH\0`, and (c) prepends the relay token on packets to the relay address when relaying.
   - Depends on: T1.6
   - Done when: a test shows QUIC still works through the wrapper and raw punches are dropped.
-- [ ] **T2.4 — host and client internet flow**
+- [x] **T2.4 — host and client internet flow**
   - Files: `crates/qr-net/src/rendezvous_client.rs`, `crates/qr-host/src/internet.rs`, `crates/qr-client/src/hosts.rs`
   - Do:
     - Host: `--rendezvous HOST:PORT` keeps a registration with reconnect.
@@ -349,7 +349,7 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
     - A LAN pair learns the host ID and relay from `HelloAck`, so "by ID" is filled in automatically.
   - Depends on: T2.2, T2.3, T1.15
   - Done when: A4 passes (cone → Direct, symmetric → Relayed).
-- [ ] **T2.5 — E2E encryption proof + fallback**
+- [x] **T2.5 — E2E encryption proof + fallback**
   - Files: `tests/e2e/a3_relay_plaintext.sh`
   - Do: a `tcpdump` (in netns, as userns root) on the relay; send the clipboard marker `QR-PLAINTEXT-CANARY-7731`; grep the pcap. Then a forged host cert must fail. Stop the relay and check LAN still works (A5).
   - Depends on: T2.4
@@ -514,6 +514,7 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
 - T1.21: clipboard is a shared `qr-clip` crate (X11 CLIPBOARD via XFixes, INCR both ways) used by host and client, so PNGs stay byte-identical. A24 passes 3/3. Windows/macOS/Wayland clients need their own backend later (T4.5 / Phase 5).
 - T1.22: files go both ways (client `--send-file` and drag and drop; host outbox folder `~/QuickRemote/Outbox`), paced by RTT, with stream priority below video. A25a/b/d pass. A25c (frame rate during transfers) is ENV-BLOCKED: `net.core.rmem_max` is 208 KiB, and the client drops 13–17k UDP packets in each run. `setup-root.sh` now raises it.
 - T1.25 (partial): the still-screen refresh is done (300 ms after the last change, one keyframe at 8× budget) and A12 passes (SSIM 0.9998). A still page also converges without the mode, so A12 doesn't show the refresh's benefit right after motion stops. 4:4:4 needs a 4:4:4 decoder on the client (`avdec_h264` from gstreamer1.0-libav, in setup) plus a stream restart; it isn't wired yet.
+- Phase 2: A4 passes through cone NATs (Direct) and symmetric NATs (Relayed), and A3a/b pass (30k relayed packets, canary never in plaintext). Deviation from T2.3: no wrapping `AsyncUdpSocket`. Hole punches and relay hellos go out on a clone of the endpoint's UDP socket (same port, so the same NAT mapping). Each relay session has its own port, and the relay learns both peers from their `PUNCH_MAGIC ‖ token` hellos, so relayed packets carry no token prefix. Relay ports bind to `--public-ip`, because on a multi-homed server a 0.0.0.0 socket can answer from another address, which NATs drop. The Docker image (A5) is written but ENV-BLOCKED: no access to the docker group.
 - T1.17/T1.18 (partial): input stream, motion running totals, XTest injector and the `--script` test driver. A19a, A20 and A23 pass (input p95 0.56–0.66 ms). uinput waits on root setup.
 
 ## Open Questions / Risks
