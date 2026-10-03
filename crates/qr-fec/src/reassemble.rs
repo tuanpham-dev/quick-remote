@@ -88,14 +88,7 @@ const WINDOW: u32 = 512;
 
 impl Reassembler {
     pub fn new(stream: u8, deadline: Duration) -> Self {
-        Self {
-            stream,
-            next: 0,
-            frames: BTreeMap::new(),
-            deadline,
-            stats: Stats::default(),
-            coders: Default::default(),
-        }
+        Self { stream, next: 0, frames: BTreeMap::new(), deadline, stats: Stats::default(), coders: Default::default() }
     }
 
     /// Restarts at frame `next` (a new stream with the same id).
@@ -157,10 +150,7 @@ impl Reassembler {
                     f.repaired += complete_block(b, &mut self.coders);
                 }
             }
-            if f.blocks
-                .iter()
-                .all(|b| b.as_ref().is_some_and(|b| b.data.is_some()))
-            {
+            if f.blocks.iter().all(|b| b.as_ref().is_some_and(|b| b.data.is_some())) {
                 let mut bytes = Vec::new();
                 for b in f.blocks.iter_mut().flatten() {
                     for s in b.data.take().into_iter().flatten() {
@@ -223,10 +213,7 @@ impl Reassembler {
                     let blocks: Vec<String> = f
                         .blocks
                         .iter()
-                        .map(|b| {
-                            b.as_ref()
-                                .map_or("-".into(), |b| format!("{}/{}+{}", b.have, b.k, b.m))
-                        })
+                        .map(|b| b.as_ref().map_or("-".into(), |b| format!("{}/{}+{}", b.have, b.k, b.m)))
                         .collect();
                     tracing::debug!(frame = self.next, ?blocks, "frame lost");
                 } else {
@@ -248,8 +235,7 @@ impl Reassembler {
         let horizon = self.deadline * 2;
         while let Some(entry) = self.frames.first_entry() {
             let f = entry.get();
-            if *entry.key() >= self.next || !f.emitted || now.duration_since(f.first_seen) < horizon
-            {
+            if *entry.key() >= self.next || !f.emitted || now.duration_since(f.first_seen) < horizon {
                 break;
             }
             let f = entry.remove();
@@ -268,20 +254,12 @@ fn complete_block(b: &mut Block, coders: &mut crate::Coders) -> u32 {
         // Inconsistent shard sizes come only from a broken peer: leave the
         // block incomplete and let the deadline declare the frame lost.
         if b.shards.iter().flatten().any(|s| s.len() != len)
-            || coders
-                .get(b.k, b.m)
-                .reconstruct_data(&mut b.shards)
-                .is_err()
+            || coders.get(b.k, b.m).reconstruct_data(&mut b.shards).is_err()
         {
             return 0;
         }
     }
-    b.data = Some(
-        b.shards
-            .drain(..b.k)
-            .map(|s| s.expect("present or rebuilt"))
-            .collect(),
-    );
+    b.data = Some(b.shards.drain(..b.k).map(|s| s.expect("present or rebuilt")).collect());
     missing
 }
 
@@ -293,19 +271,11 @@ mod tests {
     use rand::{Rng, SeedableRng};
 
     fn meta() -> FrameMeta {
-        FrameMeta {
-            codec: 1,
-            width: 64,
-            height: 64,
-            capture_us: 5,
-            ..Default::default()
-        }
+        FrameMeta { codec: 1, width: 64, height: 64, capture_us: 5, ..Default::default() }
     }
 
     fn au(id: u32, len: usize) -> Vec<u8> {
-        (0..len)
-            .map(|i| (i as u32 ^ id.wrapping_mul(2654435761)) as u8)
-            .collect()
+        (0..len).map(|i| (i as u32 ^ id.wrapping_mul(2654435761)) as u8).collect()
     }
 
     #[test]
@@ -377,11 +347,7 @@ mod tests {
         let late = r.poll(t0 + Duration::from_millis(25));
         assert!(matches!(late.as_slice(), [Event::Lost { id: 1 }, Event::Frame(f)] if f.id == 2));
         // A late shard of frame 1 is ignored.
-        assert!(
-            r.push(&f1[0], t0 + Duration::from_millis(30))
-                .unwrap()
-                .is_empty()
-        );
+        assert!(r.push(&f1[0], t0 + Duration::from_millis(30)).unwrap().is_empty());
         let s = r.take_stats();
         assert_eq!((s.frames_rx, s.frames_lost), (2, 1));
     }

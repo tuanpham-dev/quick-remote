@@ -42,22 +42,11 @@ fn start_host(pin: &'static str) -> Host {
     tokio::spawn(async move {
         while let Some(inc) = ep.accept().await {
             let conn = inc.await.unwrap();
-            let cfg = HostConfig {
-                id: &hid,
-                name: "host",
-                rendezvous: "",
-            };
+            let cfg = HostConfig { id: &hid, name: "host", rendezvous: "" };
             let r = host_handshake(&conn, &cfg, &ks, pin, &limiter).await;
             let r = match r {
                 Ok(mut s) => {
-                    s.control_tx
-                        .send(&Msg::SessionStart {
-                            profile: 1,
-                            path: 1,
-                            modes: 0,
-                        })
-                        .await
-                        .unwrap();
+                    s.control_tx.send(&Msg::SessionStart { profile: 1, path: 1, modes: 0 }).await.unwrap();
                     // Echo datagrams back until the client goes away.
                     let c2 = conn.clone();
                     tokio::spawn(async move {
@@ -72,12 +61,7 @@ fn start_host(pin: &'static str) -> Host {
             tx.send(r).unwrap();
         }
     });
-    Host {
-        addr,
-        keystore,
-        results,
-        id,
-    }
+    Host { addr, keystore, results, id }
 }
 
 async fn connect(
@@ -101,62 +85,28 @@ async fn pair_then_reconnect_without_pin() {
     let ks = Mutex::new(KeyStore::in_memory());
 
     // No PIN for an unpaired host.
-    let e = connect(&host, &client, &ks, None, None, PROTO_MAJOR)
-        .await
-        .err()
-        .expect("should fail");
-    assert!(
-        matches!(
-            e.downcast_ref::<ClientAuthError>(),
-            Some(ClientAuthError::PinNeeded)
-        ),
-        "{e}"
-    );
+    let e = connect(&host, &client, &ks, None, None, PROTO_MAJOR).await.err().expect("should fail");
+    assert!(matches!(e.downcast_ref::<ClientAuthError>(), Some(ClientAuthError::PinNeeded)), "{e}");
     assert!(host.results.recv().await.unwrap().is_err());
 
     // Wrong PIN.
-    let e = connect(&host, &client, &ks, Some("000000"), None, PROTO_MAJOR)
-        .await
-        .err()
-        .expect("should fail");
-    let pe = e
-        .downcast_ref::<PeerError>()
-        .unwrap_or_else(|| panic!("{e:#}"));
+    let e = connect(&host, &client, &ks, Some("000000"), None, PROTO_MAJOR).await.err().expect("should fail");
+    let pe = e.downcast_ref::<PeerError>().unwrap_or_else(|| panic!("{e:#}"));
     assert_eq!(pe.code, ErrorCode::PinWrong);
     assert!(host.results.recv().await.unwrap().is_err());
 
     // Right PIN pairs both ways.
-    let (_c, s) = connect(&host, &client, &ks, Some("424242"), None, PROTO_MAJOR)
-        .await
-        .unwrap();
+    let (_c, s) = connect(&host, &client, &ks, Some("424242"), None, PROTO_MAJOR).await.unwrap();
     assert!(s.paired_now);
     assert_eq!(host.results.recv().await.unwrap(), Ok(true));
     assert!(ks.lock().unwrap().get(&host.id.fingerprint).is_some());
-    assert!(
-        host.keystore
-            .lock()
-            .unwrap()
-            .get(&client.fingerprint)
-            .is_some()
-    );
+    assert!(host.keystore.lock().unwrap().get(&client.fingerprint).is_some());
 
     // Reconnect: no PIN asked, host pinned.
-    let (conn, mut s) = connect(
-        &host,
-        &client,
-        &ks,
-        None,
-        Some(host.id.fingerprint),
-        PROTO_MAJOR,
-    )
-    .await
-    .unwrap();
+    let (conn, mut s) = connect(&host, &client, &ks, None, Some(host.id.fingerprint), PROTO_MAJOR).await.unwrap();
     assert!(!s.paired_now);
     assert_eq!(host.results.recv().await.unwrap(), Ok(false));
-    assert!(matches!(
-        s.control_rx.recv().await.unwrap(),
-        Msg::SessionStart { .. }
-    ));
+    assert!(matches!(s.control_rx.recv().await.unwrap(), Msg::SessionStart { .. }));
 
     // Datagrams flow: 10,000 round trips of 1 KB.
     assert!(conn.max_datagram_size().unwrap() >= 1100);
@@ -183,24 +133,9 @@ async fn wrong_host_key_aborts() {
     let host = start_host("111111");
     let client = Identity::generate("client").unwrap();
     let ks = Mutex::new(KeyStore::in_memory());
-    let e = connect(
-        &host,
-        &client,
-        &ks,
-        Some("111111"),
-        Some([0xee; 32]),
-        PROTO_MAJOR,
-    )
-    .await
-    .err()
-    .expect("should fail");
-    assert!(
-        matches!(
-            e.downcast_ref::<ClientAuthError>(),
-            Some(ClientAuthError::HostKeyMismatch { .. })
-        ),
-        "{e}"
-    );
+    let e =
+        connect(&host, &client, &ks, Some("111111"), Some([0xee; 32]), PROTO_MAJOR).await.err().expect("should fail");
+    assert!(matches!(e.downcast_ref::<ClientAuthError>(), Some(ClientAuthError::HostKeyMismatch { .. })), "{e}");
 }
 
 #[tokio::test]
@@ -208,19 +143,10 @@ async fn version_mismatch_is_refused() {
     let mut host = start_host("111111");
     let client = Identity::generate("client").unwrap();
     let ks = Mutex::new(KeyStore::in_memory());
-    let e = connect(&host, &client, &ks, Some("111111"), None, 2)
-        .await
-        .err()
-        .expect("should fail");
-    let pe = e
-        .downcast_ref::<PeerError>()
-        .unwrap_or_else(|| panic!("{e:#}"));
+    let e = connect(&host, &client, &ks, Some("111111"), None, 2).await.err().expect("should fail");
+    let pe = e.downcast_ref::<PeerError>().unwrap_or_else(|| panic!("{e:#}"));
     assert_eq!(pe.code, ErrorCode::VersionMismatch);
-    assert!(
-        pe.text.contains("v1") && pe.text.contains("v2"),
-        "{}",
-        pe.text
-    );
+    assert!(pe.text.contains("v1") && pe.text.contains("v2"), "{}", pe.text);
     assert!(host.results.recv().await.unwrap().is_err());
 }
 
@@ -233,12 +159,7 @@ async fn rate_limit_after_five_wrong_pins() {
         let _ = connect(&host, &client, &ks, Some("000000"), None, PROTO_MAJOR).await;
         let _ = host.results.recv().await;
     }
-    let e = connect(&host, &client, &ks, Some("999999"), None, PROTO_MAJOR)
-        .await
-        .err()
-        .expect("should fail");
-    let pe = e
-        .downcast_ref::<PeerError>()
-        .unwrap_or_else(|| panic!("{e:#}"));
+    let e = connect(&host, &client, &ks, Some("999999"), None, PROTO_MAJOR).await.err().expect("should fail");
+    let pe = e.downcast_ref::<PeerError>().unwrap_or_else(|| panic!("{e:#}"));
     assert_eq!(pe.code, ErrorCode::RateLimited);
 }

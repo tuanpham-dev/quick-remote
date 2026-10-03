@@ -39,25 +39,13 @@ impl ClockSync {
         let rtt = t_recv.saturating_sub(t_client);
         let offset = t_host as i64 - (t_client + rtt / 2) as i64;
         self.samples.push_back((t_recv, rtt, offset));
-        while self
-            .samples
-            .front()
-            .is_some_and(|s| t_recv - s.0 > Self::WINDOW_US)
-        {
+        while self.samples.front().is_some_and(|s| t_recv - s.0 > Self::WINDOW_US) {
             self.samples.pop_front();
         }
-        let best = self
-            .samples
-            .iter()
-            .min_by_key(|s| s.1)
-            .expect("just pushed");
+        let best = self.samples.iter().min_by_key(|s| s.1).expect("just pushed");
         self.offset_us = best.2;
         // Report a smoothed RTT for the overlay, not the minimum.
-        self.rtt_us = if self.rtt_us == 0 {
-            rtt
-        } else {
-            (self.rtt_us * 7 + rtt) / 8
-        };
+        self.rtt_us = if self.rtt_us == 0 { rtt } else { (self.rtt_us * 7 + rtt) / 8 };
     }
 
     pub fn ready(&self) -> bool {

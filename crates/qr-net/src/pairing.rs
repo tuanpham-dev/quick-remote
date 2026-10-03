@@ -101,10 +101,7 @@ impl Pairing {
     /// (SPAKE2 yields different keys); it shows as a failed MAC check.
     pub fn finish(self, peer_msg: &[u8], t: &Transcript) -> Option<Keys> {
         let key = self.state.finish(peer_msg).ok()?;
-        Some(Keys {
-            key,
-            transcript: t.bytes(),
-        })
+        Some(Keys { key, transcript: t.bytes() })
     }
 }
 
@@ -125,12 +122,7 @@ impl Default for PinLimiter {
 
 impl PinLimiter {
     pub fn new(max: usize, ban: Duration) -> Self {
-        Self {
-            max,
-            ban,
-            failures: HashMap::new(),
-            banned: HashMap::new(),
-        }
+        Self { max, ban, failures: HashMap::new(), banned: HashMap::new() }
     }
 
     pub fn allowed(&mut self, ip: IpAddr, now: Instant) -> bool {
@@ -147,10 +139,7 @@ impl PinLimiter {
     pub fn failure(&mut self, ip: IpAddr, now: Instant) {
         let q = self.failures.entry(ip).or_default();
         q.push_back(now);
-        while q
-            .front()
-            .is_some_and(|t| now.duration_since(*t) > Duration::from_secs(60))
-        {
+        while q.front().is_some_and(|t| now.duration_since(*t) > Duration::from_secs(60)) {
             q.pop_front();
         }
         if q.len() >= self.max {
@@ -169,11 +158,7 @@ mod tests {
     use super::*;
 
     fn t(exporter: u8) -> Transcript {
-        Transcript {
-            client_fp: [1; 32],
-            host_fp: [2; 32],
-            exporter: [exporter; 32],
-        }
+        Transcript { client_fp: [1; 32], host_fp: [2; 32], exporter: [exporter; 32] }
     }
 
     fn run(client_pin: &str, host_pin: &str, tc: Transcript, th: Transcript) -> (bool, bool) {

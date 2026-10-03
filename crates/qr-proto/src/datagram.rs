@@ -38,15 +38,8 @@ pub mod vflags {
 
 impl VideoShardHeader {
     pub fn write(&self, w: &mut Writer) {
-        w.u8(kind::VIDEO)
-            .u8(self.stream)
-            .u8(self.flags)
-            .u32(self.frame);
-        w.u8(self.block)
-            .u8(self.blocks)
-            .u8(self.shard)
-            .u8(self.k)
-            .u8(self.m);
+        w.u8(kind::VIDEO).u8(self.stream).u8(self.flags).u32(self.frame);
+        w.u8(self.block).u8(self.blocks).u8(self.shard).u8(self.k).u8(self.m);
     }
 
     /// Parses a video datagram; returns the header and the shard payload.
@@ -65,11 +58,7 @@ impl VideoShardHeader {
             k: r.u8()?,
             m: r.u8()?,
         };
-        if h.k == 0
-            || h.blocks == 0
-            || h.block >= h.blocks
-            || h.shard as u16 >= h.k as u16 + h.m as u16
-        {
+        if h.k == 0 || h.blocks == 0 || h.block >= h.blocks || h.shard as u16 >= h.k as u16 + h.m as u16 {
             return Err(DecodeError::BadTag("video shard", h.shard));
         }
         Ok((h, r.rest()))
@@ -103,15 +92,8 @@ pub mod fflags {
 
 impl FrameMeta {
     pub fn write(&self, w: &mut Writer) {
-        w.u8(self.codec)
-            .u8(self.flags)
-            .u16(self.width)
-            .u16(self.height)
-            .u32(self.len);
-        w.u64(self.capture_us)
-            .u64(self.encode_start_us)
-            .u64(self.encode_end_us)
-            .u64(self.send_us);
+        w.u8(self.codec).u8(self.flags).u16(self.width).u16(self.height).u32(self.len);
+        w.u64(self.capture_us).u64(self.encode_start_us).u64(self.encode_end_us).u64(self.send_us);
     }
 
     pub fn parse(buf: &[u8]) -> Result<(Self, &[u8])> {
@@ -145,9 +127,7 @@ pub struct AudioPacket {
 impl AudioPacket {
     pub fn encode(&self) -> Vec<u8> {
         let mut w = Writer::with_capacity(16 + self.data.len());
-        w.u8(if self.mic { kind::MIC } else { kind::AUDIO })
-            .u32(self.seq)
-            .u64(self.ts_us);
+        w.u8(if self.mic { kind::MIC } else { kind::AUDIO }).u32(self.seq).u64(self.ts_us);
         w.raw(&self.data);
         w.buf
     }
@@ -159,12 +139,7 @@ impl AudioPacket {
             kind::MIC => true,
             t => return Err(DecodeError::BadTag("datagram", t)),
         };
-        Ok(Self {
-            mic,
-            seq: r.u32()?,
-            ts_us: r.u64()?,
-            data: r.rest().to_vec(),
-        })
+        Ok(Self { mic, seq: r.u32()?, ts_us: r.u64()?, data: r.rest().to_vec() })
     }
 }
 
@@ -188,14 +163,8 @@ pub struct Motion {
 impl Motion {
     pub fn encode(&self) -> Vec<u8> {
         let mut w = Writer::with_capacity(40);
-        w.u8(kind::MOTION)
-            .u32(self.seq)
-            .i64(self.rel_x)
-            .i64(self.rel_y);
-        w.bool(self.has_abs)
-            .u8(self.stream)
-            .u16(self.abs_x)
-            .u16(self.abs_y);
+        w.u8(kind::MOTION).u32(self.seq).i64(self.rel_x).i64(self.rel_y);
+        w.bool(self.has_abs).u8(self.stream).u16(self.abs_x).u16(self.abs_y);
         w.u64(self.t_client_us);
         w.buf
     }
@@ -274,12 +243,7 @@ impl PadState {
             *a = r.i16()?;
         }
         r.finish()?;
-        Ok(Self {
-            idx,
-            seq,
-            buttons,
-            axes,
-        })
+        Ok(Self { idx, seq, buttons, axes })
     }
 }
 
@@ -294,10 +258,7 @@ pub struct Probe {
 impl Probe {
     pub fn encode(&self) -> Vec<u8> {
         let mut w = Writer::with_capacity(15 + self.pad_len as usize);
-        w.u8(kind::PROBE)
-            .u32(self.seq)
-            .u64(self.ts_us)
-            .u16(self.pad_len);
+        w.u8(kind::PROBE).u32(self.seq).u64(self.ts_us).u16(self.pad_len);
         w.buf.resize(w.buf.len() + self.pad_len as usize, 0);
         w.buf
     }
@@ -307,11 +268,7 @@ impl Probe {
         if r.u8()? != kind::PROBE {
             return Err(DecodeError::BadTag("datagram", buf[0]));
         }
-        let p = Self {
-            seq: r.u32()?,
-            ts_us: r.u64()?,
-            pad_len: r.u16()?,
-        };
+        let p = Self { seq: r.u32()?, ts_us: r.u64()?, pad_len: r.u16()? };
         r.take(p.pad_len as usize)?;
         r.finish()?;
         Ok(p)

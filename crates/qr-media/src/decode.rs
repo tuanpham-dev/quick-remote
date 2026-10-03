@@ -43,11 +43,7 @@ pub struct Decoder {
 
 impl Decoder {
     /// Starts a decoder; `on_frame` runs on a streaming thread.
-    pub fn start(
-        codec: Codec,
-        element: &str,
-        on_frame: impl Fn(DecodedFrame) + Send + Sync + 'static,
-    ) -> Result<Self> {
+    pub fn start(codec: Codec, element: &str, on_frame: impl Fn(DecodedFrame) + Send + Sync + 'static) -> Result<Self> {
         init()?;
         let desc = format!(
             "appsrc name=src is-live=true format=time do-timestamp=false max-bytes=0 \
@@ -67,17 +63,9 @@ impl Decoder {
         set_prop(&dec, "compliance", "flexible");
         // libav: frame threading adds a frame of delay per thread.
         set_prop(&dec, "thread-type", "slice");
-        let src = pipeline
-            .by_name("src")
-            .expect("named")
-            .downcast::<gst_app::AppSrc>()
-            .expect("appsrc");
+        let src = pipeline.by_name("src").expect("named").downcast::<gst_app::AppSrc>().expect("appsrc");
         src.set_caps(Some(&encoded_caps(codec)));
-        let sink = pipeline
-            .by_name("out")
-            .expect("named")
-            .downcast::<gst_app::AppSink>()
-            .expect("appsink");
+        let sink = pipeline.by_name("out").expect("named").downcast::<gst_app::AppSink>().expect("appsink");
         let pushed: Arc<Mutex<VecDeque<(u32, std::time::Instant)>>> = Arc::default();
         let p2 = pushed.clone();
         sink.set_callbacks(
@@ -85,8 +73,7 @@ impl Decoder {
                 .new_sample(move |s| {
                     let sample = s.pull_sample().map_err(|_| gst::FlowError::Eos)?;
                     let caps = sample.caps().ok_or(gst::FlowError::NotNegotiated)?;
-                    let info = gst_video::VideoInfo::from_caps(caps)
-                        .map_err(|_| gst::FlowError::NotNegotiated)?;
+                    let info = gst_video::VideoInfo::from_caps(caps).map_err(|_| gst::FlowError::NotNegotiated)?;
                     let buf = sample.buffer().ok_or(gst::FlowError::Error)?;
                     let (frame_id, decode_us) = match p2.lock().expect("lock").pop_front() {
                         Some((id, t)) => (id, t.elapsed().as_micros() as u64),
@@ -119,16 +106,9 @@ impl Decoder {
                 })
                 .build(),
         );
-        pipeline
-            .set_state(gst::State::Playing)
-            .context("starting the decode pipeline")?;
+        pipeline.set_state(gst::State::Playing).context("starting the decode pipeline")?;
 
-        Ok(Self {
-            pipeline,
-            src,
-            pushed,
-            element: element.to_string(),
-        })
+        Ok(Self { pipeline, src, pushed, element: element.to_string() })
     }
 
     /// Feeds one access unit. Frames come out in order (no B-frames), so the
@@ -149,9 +129,7 @@ impl Decoder {
             }
             q.push_back((frame_id, std::time::Instant::now()));
         }
-        self.src
-            .push_buffer(buf)
-            .map_err(|e| anyhow!("decoder refused a frame: {e:?}"))?;
+        self.src.push_buffer(buf).map_err(|e| anyhow!("decoder refused a frame: {e:?}"))?;
         Ok(())
     }
 

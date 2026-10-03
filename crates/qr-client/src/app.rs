@@ -14,9 +14,7 @@ use qr_net::session::ClientAuthError;
 use qr_net::{Identity, clock::now_us};
 use qr_proto::InputEvent;
 use winit::application::ApplicationHandler;
-use winit::event::{
-    DeviceEvent, DeviceId, ElementState, MouseButton, MouseScrollDelta, WindowEvent,
-};
+use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::window::{CursorGrabMode, Fullscreen, Window, WindowId};
@@ -37,15 +35,10 @@ pub enum UserEvent {
 #[derive(Debug, Clone, PartialEq)]
 enum Screen {
     Hosts,
-    Pin {
-        target: String,
-    },
+    Pin { target: String },
     Connecting(String),
     Session,
-    Reconnecting {
-        target: String,
-        since: std::time::Instant,
-    },
+    Reconnecting { target: String, since: std::time::Instant },
     Error(String),
 }
 
@@ -93,16 +86,12 @@ pub struct App {
     cursor: (f64, f64),
 }
 
-const HOTKEY: ModifiersState = ModifiersState::CONTROL
-    .union(ModifiersState::ALT)
-    .union(ModifiersState::SHIFT);
+const HOTKEY: ModifiersState = ModifiersState::CONTROL.union(ModifiersState::ALT).union(ModifiersState::SHIFT);
 
 pub fn run(cfg: Config) -> Result<()> {
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
     let proxy = event_loop.create_proxy();
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     let browser = {
         let _g = rt.enter();
         match Browser::start() {
@@ -159,11 +148,7 @@ impl App {
     fn start_connect(&mut self, target: String, pin: Option<String>) {
         self.screen = Screen::Connecting(target.clone());
         self.target = Some(target.clone());
-        let (cfg, proxy, slot) = (
-            self.cfg.clone(),
-            self.proxy.clone(),
-            self.frame_slot.clone(),
-        );
+        let (cfg, proxy, slot) = (self.cfg.clone(), self.proxy.clone(), self.frame_slot.clone());
         let size = self.window.as_ref().map(|w| w.inner_size());
         self.rt.spawn(async move {
             let r = connect_once(&cfg, &target, pin, size, slot, proxy.clone()).await;
@@ -171,12 +156,7 @@ impl App {
                 Ok(c) => {
                     let _ = proxy.send_event(UserEvent::Connected(c));
                 }
-                Err(e)
-                    if matches!(
-                        e.downcast_ref::<ClientAuthError>(),
-                        Some(ClientAuthError::PinNeeded)
-                    ) =>
-                {
+                Err(e) if matches!(e.downcast_ref::<ClientAuthError>(), Some(ClientAuthError::PinNeeded)) => {
                     let _ = proxy.send_event(UserEvent::NeedPin(target));
                 }
                 Err(e) => {
@@ -188,15 +168,8 @@ impl App {
 
     /// Reconnects with backoff (250 ms doubling to 2 s) for up to 60 s.
     fn start_reconnect(&mut self, target: String) {
-        self.screen = Screen::Reconnecting {
-            target: target.clone(),
-            since: std::time::Instant::now(),
-        };
-        let (cfg, proxy, slot) = (
-            self.cfg.clone(),
-            self.proxy.clone(),
-            self.frame_slot.clone(),
-        );
+        self.screen = Screen::Reconnecting { target: target.clone(), since: std::time::Instant::now() };
+        let (cfg, proxy, slot) = (self.cfg.clone(), self.proxy.clone(), self.frame_slot.clone());
         let size = self.window.as_ref().map(|w| w.inner_size());
         self.rt.spawn(async move {
             let start = std::time::Instant::now();
@@ -209,8 +182,7 @@ impl App {
                         return;
                     }
                     Err(e) if start.elapsed() > Duration::from_secs(60) => {
-                        let _ = proxy
-                            .send_event(UserEvent::Failed(format!("Reconnecting gave up: {e:#}")));
+                        let _ = proxy.send_event(UserEvent::Failed(format!("Reconnecting gave up: {e:#}")));
                         return;
                     }
                     Err(e) => tracing::info!("reconnect failed: {e:#}"),
@@ -224,9 +196,8 @@ impl App {
         self.relative = on;
         if let Some(w) = &self.window {
             if on {
-                let ok = w
-                    .set_cursor_grab(CursorGrabMode::Locked)
-                    .or_else(|_| w.set_cursor_grab(CursorGrabMode::Confined));
+                let ok =
+                    w.set_cursor_grab(CursorGrabMode::Locked).or_else(|_| w.set_cursor_grab(CursorGrabMode::Confined));
                 if ok.is_err() {
                     tracing::warn!("pointer lock unavailable");
                 }
@@ -244,11 +215,7 @@ impl App {
         let t = match (&self.screen, &self.session) {
             (Screen::Session, Some(s)) => {
                 let path = s.shared.lock().expect("lock").stats.path.clone();
-                let lock = if self.relative {
-                    " · mouse locked (Ctrl+Alt+Shift+M)"
-                } else {
-                    ""
-                };
+                let lock = if self.relative { " · mouse locked (Ctrl+Alt+Shift+M)" } else { "" };
                 format!("{} — {path}{lock}", s.host_name)
             }
             (Screen::Reconnecting { target, .. }, _) => format!("{target} — Reconnecting"),
@@ -287,11 +254,7 @@ impl App {
             KeyCode::KeyS => self.show_stats = !self.show_stats,
             KeyCode::KeyF => {
                 if let Some(w) = &self.window {
-                    w.set_fullscreen(if w.fullscreen().is_some() {
-                        None
-                    } else {
-                        Some(Fullscreen::Borderless(None))
-                    });
+                    w.set_fullscreen(if w.fullscreen().is_some() { None } else { Some(Fullscreen::Borderless(None)) });
                 }
             }
             KeyCode::KeyT => {
@@ -301,9 +264,7 @@ impl App {
                         let _ = c
                             .lock()
                             .await
-                            .send(&qr_proto::Msg::SetMode {
-                                modes: qr_proto::msg::mode::SHARP_TEXT,
-                            })
+                            .send(&qr_proto::Msg::SetMode { modes: qr_proto::msg::mode::SHARP_TEXT })
                             .await;
                     });
                 }
@@ -362,10 +323,7 @@ impl App {
                         ui.horizontal(|ui| {
                             ui.label(format!("{}  ·  {}", h.name, h.os));
                             let paired = ks.by_host_id(&h.host_id).is_some();
-                            if ui
-                                .button(if paired { "Connect" } else { "Pair…" })
-                                .clicked()
-                            {
+                            if ui.button(if paired { "Connect" } else { "Pair…" }).clicked() {
                                 connect = Some((h.host_id.clone(), None));
                             }
                         });
@@ -412,16 +370,14 @@ impl App {
                 });
             }
             Screen::Reconnecting { target, since } => {
-                egui::Area::new("reconnect".into())
-                    .fixed_pos([12.0, 12.0])
-                    .show(ctx, |ui| {
-                        egui::Frame::popup(ui.style()).show(ui, |ui| {
-                            ui.label(format!(
-                                "Connection to {target} lost. Reconnecting… ({} s)",
-                                since.elapsed().as_secs()
-                            ));
-                        });
+                egui::Area::new("reconnect".into()).fixed_pos([12.0, 12.0]).show(ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.label(format!(
+                            "Connection to {target} lost. Reconnecting… ({} s)",
+                            since.elapsed().as_secs()
+                        ));
                     });
+                });
             }
             Screen::Error(e) => {
                 egui::CentralPanel::default().show(ui, |ui| {
@@ -461,8 +417,7 @@ impl App {
             self.shown = Some(*t);
         }
         let frame = match gpu.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(f)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+            wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
             _ => {
                 gpu.surface.configure(&gpu.device, &gpu.config);
                 return;
@@ -487,26 +442,17 @@ impl App {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            if self.screen == Screen::Session || matches!(self.screen, Screen::Reconnecting { .. })
-            {
-                gpu.video
-                    .draw(&gpu.queue, &mut pass, gpu.config.width, gpu.config.height);
+            if self.screen == Screen::Session || matches!(self.screen, Screen::Reconnecting { .. }) {
+                gpu.video.draw(&gpu.queue, &mut pass, gpu.config.width, gpu.config.height);
             }
         }
         // egui on top.
-        let raw = self
-            .egui_state
-            .as_mut()
-            .expect("egui")
-            .take_egui_input(&window);
+        let raw = self.egui_state.as_mut().expect("egui").take_egui_input(&window);
         let ctx = self.egui_ctx.clone();
         let mut connect = None;
         let out = ctx.run_ui(raw, |ui| connect = self.ui(ui));
         let gpu = self.gpu.as_mut().expect("gpu");
-        self.egui_state
-            .as_mut()
-            .expect("egui")
-            .handle_platform_output(&window, out.platform_output);
+        self.egui_state.as_mut().expect("egui").handle_platform_output(&window, out.platform_output);
         let tris = ctx.tessellate(out.shapes, out.pixels_per_point);
         for (id, deltas) in &out.textures_delta.set {
             for d in deltas {
@@ -517,8 +463,7 @@ impl App {
             size_in_pixels: [gpu.config.width, gpu.config.height],
             pixels_per_point: out.pixels_per_point,
         };
-        gpu.egui
-            .update_buffers(&gpu.device, &gpu.queue, &mut enc, &tris, &sd);
+        gpu.egui.update_buffers(&gpu.device, &gpu.queue, &mut enc, &tris, &sd);
         {
             let mut pass = enc
                 .begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -527,10 +472,7 @@ impl App {
                         view: &view,
                         depth_slice: None,
                         resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Load,
-                            store: wgpu::StoreOp::Store,
-                        },
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
                     })],
                     depth_stencil_attachment: None,
                     timestamp_writes: None,
@@ -584,9 +526,7 @@ async fn connect_once(
         *slot.lock().expect("lock") = Some((f, t));
         let _ = p2.send_event(UserEvent::Frame);
     });
-    let want = size
-        .map(|s| (s.width as u16, s.height as u16, 0))
-        .unwrap_or((0, 0, 0));
+    let want = size.map(|s| (s.width as u16, s.height as u16, 0)).unwrap_or((0, 0, 0));
     let opts = ConnectOpts {
         addr,
         expect_fp,
@@ -596,6 +536,8 @@ async fn connect_once(
         decoders: cfg.decoders.clone(),
         decoder_override: cfg.decoder_override.clone(),
         keep_samples: false,
+        audio_out: Some(qr_media::audio::AudioSink::Default),
+        mic: None,
     };
     let c = Arc::new(session::connect(&cfg.id, &cfg.keystore, opts, sink).await?);
     let mut ended = c.ended.clone();
@@ -617,9 +559,8 @@ impl ApplicationHandler<UserEvent> for App {
             .with_title("QuickRemote")
             .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0));
         let window = Arc::new(el.create_window(attrs).expect("create window"));
-        let instance = wgpu::Instance::new(
-            wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(window.clone())),
-        );
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(window.clone())));
         let surface = instance.create_surface(window.clone()).expect("surface");
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
@@ -629,16 +570,10 @@ impl ApplicationHandler<UserEvent> for App {
         }))
         .expect("no GPU adapter");
         let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-                .expect("device");
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).expect("device");
         let caps = surface.get_capabilities(&adapter);
         // The shader outputs gamma-encoded values: use a non-sRGB format.
-        let format = caps
-            .formats
-            .iter()
-            .copied()
-            .find(|f| !f.is_srgb())
-            .unwrap_or(caps.formats[0]);
+        let format = caps.formats.iter().copied().find(|f| !f.is_srgb()).unwrap_or(caps.formats[0]);
         let present_mode = [wgpu::PresentMode::Mailbox, wgpu::PresentMode::Immediate]
             .into_iter()
             .find(|m| caps.present_modes.contains(m))
@@ -667,14 +602,7 @@ impl ApplicationHandler<UserEvent> for App {
             None,
             None,
         ));
-        self.gpu = Some(Gpu {
-            surface,
-            device,
-            queue,
-            config,
-            video,
-            egui,
-        });
+        self.gpu = Some(Gpu { surface, device, queue, config, video, egui });
         self.window = Some(window.clone());
         window.request_redraw();
     }
@@ -714,9 +642,7 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn device_event(&mut self, _el: &ActiveEventLoop, _id: DeviceId, ev: DeviceEvent) {
-        if let (DeviceEvent::MouseMotion { delta }, true, Some(s)) =
-            (ev, self.relative, &self.session)
-        {
+        if let (DeviceEvent::MouseMotion { delta }, true, Some(s)) = (ev, self.relative, &self.session) {
             s.input.rel(delta.0, delta.1);
         }
     }
@@ -748,12 +674,7 @@ impl ApplicationHandler<UserEvent> for App {
                     let c = s.control.clone();
                     let (w, h) = (size.width as u16, size.height as u16);
                     self.rt.spawn(async move {
-                        let m = qr_proto::Msg::Resize {
-                            stream: 0,
-                            width: w,
-                            height: h,
-                            refresh: 0,
-                        };
+                        let m = qr_proto::Msg::Resize { stream: 0, width: w, height: h, refresh: 0 };
                         let _ = c.lock().await.send(&m).await;
                     });
                 }
@@ -787,8 +708,7 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::CursorMoved { position, .. } if in_session => {
                 self.cursor = (position.x, position.y);
                 if !self.relative
-                    && let (Some((x, y)), Some(s)) =
-                        (self.to_stream(position.x, position.y), &self.session)
+                    && let (Some((x, y)), Some(s)) = (self.to_stream(position.x, position.y), &self.session)
                 {
                     s.input.abs(0, x, y);
                 }
@@ -803,10 +723,7 @@ impl ApplicationHandler<UserEvent> for App {
                     MouseButton::Other(_) => return,
                 };
                 if let Some(s) = &self.session {
-                    s.input.send(InputEvent::Button {
-                        button: b,
-                        down: state == ElementState::Pressed,
-                    });
+                    s.input.send(InputEvent::Button { button: b, down: state == ElementState::Pressed });
                 }
             }
             WindowEvent::MouseWheel { delta, .. } if in_session => {

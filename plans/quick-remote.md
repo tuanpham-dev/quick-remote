@@ -102,12 +102,12 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
 **Checkpoint:** `tests/e2e/run.sh phase1` passes A1, A2, A6, A7, A8, A11–A14, A16–A25 and A29 on the simulated LAN, and A15 on a nested X11 session and a headless mutter Wayland session.
 
 #### Milestone 1a — protocol and transport
-- [ ] **T1.1 — workspace skeleton**
+- [x] **T1.1 — workspace skeleton**
   - Files: `Cargo.toml`, `rust-toolchain.toml`, `crates/{qr-proto,qr-fec,qr-net,qr-media,qr-host,qr-client,qr-relay,qr-latency}/Cargo.toml` + `src/lib.rs` or `src/main.rs`, `.gitignore`, `README.md`
   - Do: workspace with shared deps (quinn 0.11, rustls 0.23 ring, rcgen, tokio, gstreamer 0.25, reed-solomon-simd 3, mdns-sd 0.21, spake2, winit, wgpu, gilrs, evdev, x11rb, clap, tracing, anyhow, serde). `git init`.
   - Depends on: —
   - Done when: `cargo build --workspace` succeeds.
-- [ ] **T1.2 — wire protocol + spec doc**
+- [x] **T1.2 — wire protocol + spec doc**
   - Files: `crates/qr-proto/src/{lib.rs,msg.rs,codec.rs,datagram.rs}`, `docs/protocol.md`
   - Do:
     - `PROTO_MAJOR=1`, `PROTO_MINOR=0`.
@@ -117,19 +117,19 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
     - Framing on streams: u32 length + body, max 1 MiB.
   - Depends on: T1.1
   - Done when: round-trip unit tests pass for every variant, and `docs/protocol.md` documents every byte.
-- [ ] **T1.3 — conformance vectors**
+- [x] **T1.3 — conformance vectors**
   - Files: `conformance/vectors.json`, `crates/qr-proto/tests/vectors.rs`, `crates/qr-proto/src/bin/gen-vectors.rs`
   - Do: generate hex encodings of one sample of every message and datagram, and test that decoding then re-encoding matches.
   - Depends on: T1.2
   - Done when: `cargo test -p qr-proto` passes (part of A32).
-- [ ] **T1.4 — FEC**
+- [x] **T1.4 — FEC**
   - Files: `crates/qr-fec/src/{lib.rs,packetize.rs,reassemble.rs}`
   - Do:
     - `Packetizer::frame(meta, bytes, parity_ratio, mtu) -> Vec<Datagram>`: shard size = mtu − headers; blocks of at most 32 data shards; parity = ceil(k × ratio).
     - `Reassembler` keyed by `(stream, frame_id)`: repairs blocks with ≥ k shards, emits complete frames in order, and reports `FrameLost` after a deadline of max(2 × frame interval, 20 ms) past the newest frame. Counts repaired shards.
   - Depends on: T1.2
   - Done when: a property test with 0–(parity−1) shards dropped per block always reassembles exactly; more loss yields `FrameLost`; 1080p-sized frames pack and unpack at ≥ 2 GB/s in a bench.
-- [ ] **T1.5 — identity, key store, pairing**
+- [x] **T1.5 — identity, key store, pairing**
   - Files: `crates/qr-net/src/{identity.rs,keystore.rs,pairing.rs,tls.rs}`
   - Do:
     - `Identity::load_or_create(dir)` (rcgen ECDSA P-256, 10-year validity), `host_id()`.
@@ -140,7 +140,7 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
     - Rate limit: 5 failures per minute per source IP, then ignore for 60 s.
   - Depends on: T1.2
   - Done when: unit tests show a correct PIN pairs, a wrong PIN fails both confirmations, and a MITM with a different cert fails.
-- [ ] **T1.6 — QUIC session layer**
+- [x] **T1.6 — QUIC session layer**
   - Files: `crates/qr-net/src/{endpoint.rs,session.rs,clock.rs}`
   - Do:
     - `Endpoint::bind(addr)` with quinn: datagrams on, receive buffer 8 MiB, BBR congestion control, initial window 1 MiB on private addresses, keep-alive 1 s, idle timeout 5 s.
@@ -149,24 +149,24 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
     - `ClockSync`: ping every 200 ms; the offset comes from the sample with minimum RTT in a sliding 5 s window.
   - Depends on: T1.5
   - Done when: a loopback test exchanges 10,000 datagrams and control messages, and the clock offset error is < 0.5 ms on loopback.
-- [ ] **T1.7 — mDNS discovery**
+- [x] **T1.7 — mDNS discovery**
   - Files: `crates/qr-net/src/discovery.rs`
   - Do: `advertise(info)` and `browse() -> Stream<HostInfo>` on `_quickremote._udp.local.` with the TXT fields from Approach.
   - Depends on: T1.1
   - Done when: a test in two netns finds the host in < 3 s (A1).
-- [ ] **T1.8 — netns test harness**
+- [x] **T1.8 — netns test harness**
   - Files: `tests/e2e/netns.sh`, `tests/e2e/lib.sh`, `tests/e2e/run.sh`
   - Do: `netns.sh lan|wan|nat-cone|nat-sym|relay` builds the topology inside `unshare -rn` with veth pairs, `tc netem` (lan: 1 Gbit, 0.2 ms; wan: 10 Mbit, 25 ms each way, 1% loss), and nft masquerade for NAT (`fully-random` for the symmetric one). It runs given commands in the named namespaces (via `nsenter` on PID files). `run.sh phaseN` runs the criteria scripts and prints PASS / FAIL / ENV-BLOCKED per A-ID.
   - Depends on: —
   - Done when: `netns.sh lan -- ping` passes between namespaces, and netem shows in `tc qdisc`.
 
 #### Milestone 1b — media pipeline on the virtual display
-- [ ] **T1.9 — encoder probing**
+- [x] **T1.9 — encoder probing**
   - Files: `crates/qr-media/src/{lib.rs,probe.rs,codec.rs}`
   - Do: rank candidate encoders per codec: VA (`vaav1enc`, `vah265enc`/`vah265lpenc`, `vah264enc`/`vah264lpenc`), NV (`nvav1enc`, `nvh265enc`, `nvh264enc`), QSV, AMF, then software (`svtav1enc`, `x265enc`, `x264enc`, `openh264enc`). Open each with a 64×64 test buffer, keep those that produce output, and report the `Vec<EncoderCaps{codec, element, hw, max_res, chroma444}>`. Same for decoders on the client.
   - Depends on: T1.1
   - Done when: on this machine the probe lists `vah264lpenc` (hw) plus x264, x265, svtav1 and openh264 (sw). This is checked by `qr-host --probe`.
-- [ ] **T1.10 — encode pipeline**
+- [x] **T1.10 — encode pipeline**
   - Files: `crates/qr-media/src/encode.rs`
   - Do:
     - Build `src ! [vapostproc|videoconvert] ! enc ! parse ! appsink` with low-latency settings: no B-frames, one-frame VBV, CBR-capped VBR, rate from `set_bitrate()`, GOP infinite, IDR on `force_keyframe()` via a `GstForceKeyUnit` event, and `sync=false` on appsink.
@@ -285,7 +285,7 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
   - Do: `swaymsg create_output` adds headless outputs (HEADLESS-2…), each captured through its own portal ScreenCast session, so each gets its own PipeWire node. `MonitorList` and `SelectMonitor`. The video datagram `stream` byte selects the monitor. The client opens a second window as a second video stream inside the same session.
   - Depends on: T1.12, T1.15
   - Done when: A16 passes.
-- [ ] **T1.24 — rate control, profiles, recovery**
+- [x] **T1.24 — rate control, profiles, recovery**
   - Files: `crates/qr-host/src/ratectl.rs`, `crates/qr-client/src/feedback.rs`
   - Do:
     - Client `Feedback` every 50 ms: bytes received, shards lost, shards repaired, frames lost, one-way delay samples (min, max, slope).
@@ -299,7 +299,7 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
   - Do: when `SetMode{sharp}` is on and an encoder with `chroma444` exists, rebuild the pipeline with Y444 caps. Otherwise, run still detection (no damage for 300 ms, from PipeWire buffer flags or frame-hash equality) and send one refresh frame at QP 18. Toggle from the client hotkey T.
   - Depends on: T1.24
   - Done when: A12 passes (the SSIM check uses `tests/e2e/ssim.py`, which compares the client's decoded PNG with the host's capture PNG).
-- [ ] **T1.26 — stats overlay + qr-latency**
+- [x] **T1.26 — stats overlay + qr-latency**
   - Files: `crates/qr-client/src/overlay.rs`, `crates/qr-latency/src/main.rs`
   - Do: the overlay (egui) shows the fields from R29. `--stats-json` writes one line per second. `qr-latency --connect … --duration 120 --size 1920x1080@60` runs a headless client and reports p50, p95 and p99 of capture→present and each part.
   - Depends on: T1.14, T1.24
@@ -505,9 +505,18 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
   - R31: T4.6
   - R32: T1.2, T1.3, T3.2
 
+## Progress notes
+- T1.4: FEC uses GF(2^8) Reed-Solomon (`reed-solomon-erasure`) instead of `reed-solomon-simd`, because the latter's decoder costs about 350 µs per block. Measured throughput is 0.7–1.3 GB/s (packetize + reassemble), not the 2 GB/s first guessed, which is about 0.14 ms per 100 KB frame. Per-block parity is sized from the measured loss so a block fails with probability under 0.1%.
+- T1.6: path-MTU discovery is off (fixed 1200-byte packets). Black-hole detection under random loss was dropping queued video datagrams. Tests run with `QR_GSO=0`, because netem drops a whole GSO batch at once.
+- T1.24: the encoder bitrate is scaled by source fps ÷ capped fps; capture hold is re-checked every 5 ms; growth is 50%/s after 3 quiet seconds. A10 and A11 pass on the 60–90 s runs; the full 180 s run is still to do.
+- T1.14 (partial): headless and window clients decode and render (offscreen renderer test passes). Measured on loopback, VA-API → VA-API 1080p60 is about 10 ms from capture to decoded picture.
+- T1.13/T1.16 (partial): Opus audio both ways with PLC. Mic WAV → host WAV correlation is 0.997 on loopback. Audio latency estimate is about 18 ms. The private PipeWire sink/source arrives with the virtual display.
+- T1.17/T1.18 (partial): input stream, motion running totals, XTest injector and the `--script` test driver. A19a, A20 and A23 pass (input p95 0.56–0.66 ms). uinput waits on root setup.
+
 ## Open Questions / Risks
 - **Pen inside the virtual display.** Resolved in pre-flight: the virtual display is sway headless with libinput, so the uinput pen reaches apps there. The risk is that sway/libinput needs device access through the `input` group (T0.2) and `LIBSEAT_BACKEND=noop`. Unverified until T0.2 is done; T1.11 checks it first.
 - **One-frame decode hold for x264/openh264 streams** (found in T1.14). GStreamer's H.264 decoders (`vah264dec`, `openh264dec`) hold each picture until the next one arrives when the SPS declares a one-frame DPB (x264's fast presets, openh264), even with `compliance=flexible`. VA-encoded streams aren't affected. That costs one frame (16.7 ms at 60 fps) on the CPU-encoder → hardware-decoder path. Handling: investigate. The candidate fix is a client-side SPS rewrite (VUI `max_dec_frame_buffering`/`num_reorder_frames`) in front of the decoder. Until then, A8 is measured on the VA→VA path, and the overlay shows the decode time.
+- **Text mode: the first borrowed character is sometimes dropped** (found in T1.18). Characters missing from the host layout are typed by lending them a spare keycode. Measured with xev on Xvfb, about 1 run in 3 drops the first borrowed character of the session (`é` in "héllo 漢字"). Later borrowed characters always arrive, and characters in the layout use their own key. A 20 ms pause after each remap and a warm-up remap at start didn't fix it. Handling: investigate, either a client-side check with a real toolkit (GTK) once the virtual display exists, or typing borrowed characters through uinput + XKB keymap updates on Wayland hosts.
 - **HEVC on this machine.** Debian's free Intel driver exposes only `vah264lpenc`. HEVC and 4:4:4 need `intel-media-va-driver-non-free` (in T0.2). Until then, A7 reports H.264 on VA-API, and A12 uses the still-refresh path.
 - **Root-only setup.** uinput, KVM, Docker, render group and packages need T0.2, run by the user. The criteria that depend on it are ENV-BLOCKED until then.
 - **Portal renegotiation on resize** (xdg-desktop-portal-wlr) is unverified. Fallback: restart the ScreenCast session on resize, with a keyframe on the new stream.

@@ -13,17 +13,13 @@ fn main() -> anyhow::Result<()> {
         for d in decs.iter().filter(|d| d.codec == e.codec) {
             let out = Arc::new(Mutex::new(Vec::new()));
             let o2 = out.clone();
-            let dec = Arc::new(Decoder::start(e.codec, d.element, move |f| {
-                o2.lock().unwrap().push(f)
-            })?);
+            let dec = Arc::new(Decoder::start(e.codec, d.element, move |f| o2.lock().unwrap().push(f))?);
             let dec2 = dec.clone();
             let n = Arc::new(Mutex::new(0u32));
             let n2 = n.clone();
             let cfg = EncodeConfig {
                 encoder: e.clone(),
-                source: Source::Test {
-                    pattern: "smpte".into(),
-                },
+                source: Source::Test { pattern: "smpte".into() },
                 width: 1920,
                 height: 1080,
                 fps: 60,

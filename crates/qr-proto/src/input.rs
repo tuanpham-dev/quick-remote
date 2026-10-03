@@ -32,15 +32,7 @@ pub enum InputEvent {
     /// Pen sample. `x`,`y` in stream pixels ×16 (sub-pixel), `pressure`
     /// 0..=65535 (rescaled by the client from its device range), tilt in
     /// degrees −90..=90.
-    Pen {
-        stream: u8,
-        x: u32,
-        y: u32,
-        pressure: u16,
-        tilt_x: i8,
-        tilt_y: i8,
-        flags: u8,
-    },
+    Pen { stream: u8, x: u32, y: u32, pressure: u16, tilt_x: i8, tilt_y: i8, flags: u8 },
 }
 
 mod tag {
@@ -75,15 +67,7 @@ impl InputEvent {
             Self::ReleaseAll => {
                 w.u8(tag::RELEASE_ALL);
             }
-            Self::Pen {
-                stream,
-                x,
-                y,
-                pressure,
-                tilt_x,
-                tilt_y,
-                flags,
-            } => {
+            Self::Pen { stream, x, y, pressure, tilt_x, tilt_y, flags } => {
                 w.u8(tag::PEN).u8(*stream).u32(*x).u32(*y).u16(*pressure);
                 w.i8(*tilt_x).i8(*tilt_y).u8(*flags);
             }
@@ -94,23 +78,10 @@ impl InputEvent {
     pub fn decode(buf: &[u8]) -> Result<Self> {
         let mut r = Reader::new(buf);
         let ev = match r.u8()? {
-            tag::KEY => Self::Key {
-                code: r.u16()?,
-                down: r.bool()?,
-            },
-            tag::BUTTON => Self::Button {
-                button: r.u8()?,
-                down: r.bool()?,
-            },
-            tag::ABS => Self::Abs {
-                stream: r.u8()?,
-                x: r.u16()?,
-                y: r.u16()?,
-            },
-            tag::WHEEL => Self::Wheel {
-                dx: r.i16()?,
-                dy: r.i16()?,
-            },
+            tag::KEY => Self::Key { code: r.u16()?, down: r.bool()? },
+            tag::BUTTON => Self::Button { button: r.u8()?, down: r.bool()? },
+            tag::ABS => Self::Abs { stream: r.u8()?, x: r.u16()?, y: r.u16()? },
+            tag::WHEEL => Self::Wheel { dx: r.i16()?, dy: r.i16()? },
             tag::TEXT => Self::Text { text: r.str()? },
             tag::RELEASE_ALL => Self::ReleaseAll,
             tag::PEN => Self::Pen {

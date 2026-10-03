@@ -9,6 +9,7 @@ pub mod keystore;
 pub mod pairing;
 pub mod session;
 pub mod tls;
+pub mod trace;
 
 pub use identity::{Fingerprint, Identity};
 pub use keystore::KeyStore;

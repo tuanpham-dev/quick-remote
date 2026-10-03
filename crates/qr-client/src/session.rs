@@ -9,13 +9,14 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow, bail};
 use bytes::Bytes;
 use qr_fec::{Event, Reassembler};
+use qr_media::audio::{AudioCapture, AudioPlayer, AudioSink, AudioSource, PLAYOUT_US};
 use qr_media::decode::{DecodedFrame, Decoder};
 use qr_media::probe::DecoderInfo;
 use qr_net::clock::{ClockSync, instant_to_us, now_us};
 use qr_net::keystore::KeyStore;
 use qr_net::session::{FramedSend, client_handshake};
 use qr_net::{Fingerprint, Identity, endpoint};
-use qr_proto::datagram::kind;
+use qr_proto::datagram::{AudioPacket, kind};
 use qr_proto::msg::{Feedback, HostStats};
 use qr_proto::{ALPN, Codec, InputEvent, Msg, PROTO_MAJOR, PROTO_MINOR};
 use tokio::sync::Mutex as AsyncMutex;
@@ -45,6 +46,8 @@ pub struct Stats {
     pub decode_ms: f32,
     pub present_ms: f32,
     pub total_ms: f32,
+    /// Host capture → client playout of audio, ms (arrival + playout buffer).
+    pub audio_ms: f32,
 }
 
 /// Per-frame timeline, client clock µs (`None` until known).
@@ -85,6 +88,7 @@ pub struct Shared {
     fb: Feedback,
     delays: Vec<(i64, i64)>,
     pub host: Option<HostStats>,
+    audio_lat: (f64, u32),
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize)]
@@ -184,27 +188,19 @@ pub struct ConnectOpts {
     pub decoders: Vec<DecoderInfo>,
     pub decoder_override: Option<String>,
     pub keep_samples: bool,
+    /// Where host audio plays (`None`: muted).
+    pub audio_out: Option<AudioSink>,
+    /// Microphone to send to the host (`None`: off).
+    pub mic: Option<AudioSource>,
 }
 
 /// Called with every decoded frame (window mode renders it).
 pub type FrameSink = Arc<dyn Fn(DecodedFrame, FrameTimes) + Send + Sync>;
 
-pub async fn connect(
-    id: &Identity,
-    keystore: &Mutex<KeyStore>,
-    o: ConnectOpts,
-    sink: FrameSink,
-) -> Result<Connected> {
-    let bind: SocketAddr = if o.addr.is_ipv6() {
-        "[::]:0".parse()?
-    } else {
-        "0.0.0.0:0".parse()?
-    };
+pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, sink: FrameSink) -> Result<Connected> {
+    let bind: SocketAddr = if o.addr.is_ipv6() { "[::]:0".parse()? } else { "0.0.0.0:0".parse()? };
     let ep = endpoint::endpoint(bind, id, false, &[ALPN])?;
-    let conn = ep
-        .connect(o.addr, "quickremote")?
-        .await
-        .with_context(|| format!("connecting to {}", o.addr))?;
+    let conn = ep.connect(o.addr, "quickremote")?.await.with_context(|| format!("connecting to {}", o.addr))?;
     let caps = qr_media::probe::decoder_caps(&o.decoders);
     let hello = Msg::Hello {
         major: PROTO_MAJOR,
@@ -216,15 +212,7 @@ pub async fn connect(
         want_refresh: o.want.2,
         decoders: caps,
     };
-    let s = client_handshake(
-        &conn,
-        id.fingerprint,
-        hello,
-        keystore,
-        o.pin.as_deref(),
-        o.expect_fp,
-    )
-    .await?;
+    let s = client_handshake(&conn, id.fingerprint, hello, keystore, o.pin.as_deref(), o.expect_fp).await?;
     let mut rx = s.control_rx;
     let control = Arc::new(AsyncMutex::new(s.control_tx));
     let shared = Arc::new(Mutex::new(Shared {
@@ -237,15 +225,14 @@ pub async fn connect(
         fb: Feedback::default(),
         delays: Vec::new(),
         host: None,
+        audio_lat: (0.0, 0),
     }));
 
     // Wait for the session to start and the first stream to be announced.
     let mut codec = None;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while codec.is_none() {
-        let m = tokio::time::timeout_at(deadline, rx.recv())
-            .await
-            .context("waiting for the stream")??;
+        let m = tokio::time::timeout_at(deadline, rx.recv()).await.context("waiting for the stream")??;
         match m {
             Msg::SessionStart { profile, path, .. } => {
                 let mut sh = shared.lock().expect("lock");
@@ -257,12 +244,7 @@ pub async fn connect(
                 }
                 .into();
             }
-            Msg::StreamStarted {
-                codec: c,
-                width,
-                height,
-                ..
-            } => {
+            Msg::StreamStarted { codec: c, width, height, .. } => {
                 let mut sh = shared.lock().expect("lock");
                 sh.stats.width = width as u32;
                 sh.stats.height = height as u32;
@@ -276,12 +258,7 @@ pub async fn connect(
     let dec_el = o
         .decoder_override
         .clone()
-        .or_else(|| {
-            o.decoders
-                .iter()
-                .find(|d| d.codec == codec)
-                .map(|d| d.element.to_string())
-        })
+        .or_else(|| o.decoders.iter().find(|d| d.codec == codec).map(|d| d.element.to_string()))
         .ok_or_else(|| anyhow!("no decoder for {}", codec.name()))?;
     shared.lock().expect("lock").stats.codec = codec.name().into();
     shared.lock().expect("lock").stats.decoder = dec_el.clone();
@@ -337,17 +314,46 @@ pub async fn connect(
         sink(f, times);
     })?);
 
+    let player = match &o.audio_out {
+        Some(sink) => match AudioPlayer::start(sink, 2) {
+            Ok(p) => Some(Arc::new(p)),
+            Err(e) => {
+                tracing::warn!("audio playback is off: {e:#}");
+                None
+            }
+        },
+        None => None,
+    };
+    let mic = match &o.mic {
+        Some(src) => {
+            let conn = conn.clone();
+            let seq = std::sync::atomic::AtomicU32::new(0);
+            let clock = qr_media::ClockMap::new(now_us);
+            match AudioCapture::start(src, 1, 32_000, clock, move |data, ts_us| {
+                let p =
+                    AudioPacket { mic: true, seq: seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed), ts_us, data };
+                let _ = conn.send_datagram(Bytes::from(p.encode()));
+            }) {
+                Ok(m) => Some(m),
+                Err(e) => {
+                    tracing::warn!("microphone is off: {e:#}");
+                    None
+                }
+            }
+        }
+        None => None,
+    };
+
     // Media receive loop.
     {
-        let (conn, shared, control, decoder, end_tx) = (
-            conn.clone(),
-            shared.clone(),
-            control.clone(),
-            decoder.clone(),
-            end_tx.clone(),
-        );
+        let (conn, shared, control, decoder, end_tx, player) =
+            (conn.clone(), shared.clone(), control.clone(), decoder.clone(), end_tx.clone(), player.clone());
         tasks.push(tokio::spawn(async move {
-            let r = recv_loop(&conn, &shared, &control, &decoder).await;
+            let _mic = mic;
+            let r = recv_loop(&conn, &shared, &control, &decoder, player.as_deref()).await;
+            if let Some(p) = player {
+                p.finish();
+            }
             let _ = end_tx.send(Some(r.err().map_or("closed".into(), |e| e.to_string())));
         }));
     }
@@ -357,14 +363,8 @@ pub async fn connect(
         tasks.push(tokio::spawn(async move {
             loop {
                 match rx.recv().await {
-                    Ok(Msg::Pong {
-                        t_client, t_host, ..
-                    }) => {
-                        shared
-                            .lock()
-                            .expect("lock")
-                            .clock
-                            .sample(t_client, t_host, now_us());
+                    Ok(Msg::Pong { t_client, t_host, .. }) => {
+                        shared.lock().expect("lock").clock.sample(t_client, t_host, now_us());
                     }
                     Ok(Msg::HostStats(h)) => {
                         let mut sh = shared.lock().expect("lock");
@@ -397,10 +397,7 @@ pub async fn connect(
                 seq = seq.wrapping_add(1);
                 let mut msgs = Vec::new();
                 if seq % 4 == 0 {
-                    msgs.push(Msg::Ping {
-                        seq,
-                        t_client: now_us(),
-                    });
+                    msgs.push(Msg::Ping { seq, t_client: now_us() });
                 }
                 {
                     let mut sh = shared.lock().expect("lock");
@@ -438,6 +435,7 @@ async fn recv_loop(
     shared: &Mutex<Shared>,
     control: &AsyncMutex<FramedSend>,
     decoder: &Decoder,
+    player: Option<&AudioPlayer>,
 ) -> Result<()> {
     let frame_ms: f64 = 1000.0 / 60.0;
     let mut reasm = Reassembler::new(0, Duration::from_millis((2.0 * frame_ms).max(20.0) as u64));
@@ -450,6 +448,18 @@ async fn recv_loop(
                 let d: Bytes = d?;
                 match d.first() {
                     Some(&kind::VIDEO) => reasm.push(&d, Instant::now()).unwrap_or_default(),
+                    Some(&kind::AUDIO) => {
+                        if let (Some(p), Ok(a)) = (player, AudioPacket::decode(&d)) {
+                            p.push(a.seq, &a.data)?;
+                            let mut sh = shared.lock().expect("lock");
+                            if sh.clock.ready() {
+                                let lat = now_us() as i64 - sh.clock.to_client(a.ts_us) + PLAYOUT_US as i64;
+                                sh.audio_lat.0 += lat as f64;
+                                sh.audio_lat.1 += 1;
+                            }
+                        }
+                        Vec::new()
+                    }
                     _ => Vec::new(),
                 }
             }
@@ -487,14 +497,7 @@ async fn recv_loop(
                 Event::Lost { id } => {
                     need_key = true;
                     decoder.flush_pending();
-                    control
-                        .lock()
-                        .await
-                        .send(&Msg::FrameLost {
-                            stream: 0,
-                            frame: id,
-                        })
-                        .await?;
+                    control.lock().await.send(&Msg::FrameLost { stream: 0, frame: id }).await?;
                 }
             }
         }
@@ -586,6 +589,10 @@ impl Shared {
         s.fps = w.frames as f32 / secs;
         s.kbps = (w.bytes as f32 * 8.0 / secs / 1000.0) as u32;
         s.rtt_ms = rtt.as_secs_f32() * 1000.0;
+        if self.audio_lat.1 > 0 {
+            s.audio_ms = (self.audio_lat.0 / self.audio_lat.1 as f64 / 1000.0) as f32;
+            self.audio_lat = (0.0, 0);
+        }
         let shards = (w.shards_rx + w.shards_lost).max(1) as f32;
         s.loss_pct = w.shards_lost as f32 / shards * 100.0;
         if w.lat_n > 0 {
@@ -620,11 +627,7 @@ fn slope(d: &[(i64, i64)]) -> i32 {
         sxy += x * y;
     }
     let den = n * sxx - sx * sx;
-    if den.abs() < 1e-12 {
-        0
-    } else {
-        ((n * sxy - sx * sy) / den) as i32
-    }
+    if den.abs() < 1e-12 { 0 } else { ((n * sxy - sx * sy) / den) as i32 }
 }
 
 /// Ends the session on purpose: `Bye`, then a close that reaches the host

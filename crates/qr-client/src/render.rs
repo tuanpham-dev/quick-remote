@@ -143,10 +143,7 @@ impl VideoRenderer {
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                ..Default::default()
-            },
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleStrip, ..Default::default() },
             depth_stencil: None,
             multisample: Default::default(),
             multiview_mask: None,
@@ -164,13 +161,7 @@ impl VideoRenderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        Self {
-            pipeline,
-            bgl,
-            sampler,
-            uniforms,
-            planes: None,
-        }
+        Self { pipeline, bgl, sampler, uniforms, planes: None }
     }
 
     pub fn size(&self) -> Option<(u32, u32)> {
@@ -180,35 +171,23 @@ impl VideoRenderer {
     fn plane_dims(f: PixelFormat, w: u32, h: u32) -> [(u32, u32, wgpu::TextureFormat); 3] {
         let r8 = wgpu::TextureFormat::R8Unorm;
         match f {
-            PixelFormat::Nv12 => [
-                (w, h, r8),
-                (w.div_ceil(2), h.div_ceil(2), wgpu::TextureFormat::Rg8Unorm),
-                (1, 1, r8),
-            ],
-            PixelFormat::I420 => [
-                (w, h, r8),
-                (w.div_ceil(2), h.div_ceil(2), r8),
-                (w.div_ceil(2), h.div_ceil(2), r8),
-            ],
+            PixelFormat::Nv12 => {
+                [(w, h, r8), (w.div_ceil(2), h.div_ceil(2), wgpu::TextureFormat::Rg8Unorm), (1, 1, r8)]
+            }
+            PixelFormat::I420 => [(w, h, r8), (w.div_ceil(2), h.div_ceil(2), r8), (w.div_ceil(2), h.div_ceil(2), r8)],
             PixelFormat::Y444 => [(w, h, r8), (w, h, r8), (w, h, r8)],
         }
     }
 
     pub fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, f: &DecodedFrame) {
         let dims = Self::plane_dims(f.format, f.width, f.height);
-        let stale = self
-            .planes
-            .as_ref()
-            .is_none_or(|p| p.width != f.width || p.height != f.height || p.format != f.format);
+        let stale =
+            self.planes.as_ref().is_none_or(|p| p.width != f.width || p.height != f.height || p.format != f.format);
         if stale {
             let textures = dims.map(|(w, h, format)| {
                 device.create_texture(&wgpu::TextureDescriptor {
                     label: Some("plane"),
-                    size: wgpu::Extent3d {
-                        width: w,
-                        height: h,
-                        depth_or_array_layers: 1,
-                    },
+                    size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
                     mip_level_count: 1,
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
@@ -217,52 +196,25 @@ impl VideoRenderer {
                     view_formats: &[],
                 })
             });
-            let views = textures
-                .each_ref()
-                .map(|t| t.create_view(&Default::default()));
+            let views = textures.each_ref().map(|t| t.create_view(&Default::default()));
             let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("yuv"),
                 layout: &self.bgl,
                 entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: self.uniforms.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&views[0]),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::TextureView(&views[1]),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: wgpu::BindingResource::TextureView(&views[2]),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 4,
-                        resource: wgpu::BindingResource::Sampler(&self.sampler),
-                    },
+                    wgpu::BindGroupEntry { binding: 0, resource: self.uniforms.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&views[0]) },
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&views[1]) },
+                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&views[2]) },
+                    wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&self.sampler) },
                 ],
             });
-            self.planes = Some(Planes {
-                width: f.width,
-                height: f.height,
-                format: f.format,
-                textures,
-                bind_group,
-            });
+            self.planes = Some(Planes { width: f.width, height: f.height, format: f.format, textures, bind_group });
         }
         let p = self.planes.as_ref().expect("just made");
         let planes = if f.format == PixelFormat::Nv12 { 2 } else { 3 };
         for i in 0..planes {
             let (w, h, fmt) = dims[i];
-            let bpp = if fmt == wgpu::TextureFormat::Rg8Unorm {
-                2
-            } else {
-                1
-            };
+            let bpp = if fmt == wgpu::TextureFormat::Rg8Unorm { 2 } else { 1 };
             let start = f.offsets[i];
             let len = f.strides[i] * (h as usize - 1) + w as usize * bpp;
             let Some(data) = f.data.get(start..start + len) else {
@@ -281,23 +233,13 @@ impl VideoRenderer {
                     bytes_per_row: Some(f.strides[i] as u32),
                     rows_per_image: Some(h),
                 },
-                wgpu::Extent3d {
-                    width: w,
-                    height: h,
-                    depth_or_array_layers: 1,
-                },
+                wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
             );
         }
     }
 
     /// Draws the picture letterboxed into a `win_w × win_h` target.
-    pub fn draw(
-        &self,
-        queue: &wgpu::Queue,
-        pass: &mut wgpu::RenderPass<'_>,
-        win_w: u32,
-        win_h: u32,
-    ) {
+    pub fn draw(&self, queue: &wgpu::Queue, pass: &mut wgpu::RenderPass<'_>, win_w: u32, win_h: u32) {
         let Some(p) = &self.planes else { return };
         let (_, _, w, h) = fit(win_w, win_h, p.width, p.height);
         let u = Uniforms {
@@ -325,17 +267,12 @@ mod tests {
             eprintln!("no GPU adapter; skipping");
             return;
         };
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
         let fmt = wgpu::TextureFormat::Rgba8Unorm;
         let (tw, th) = (256u32, 128u32);
         let target = device.create_texture(&wgpu::TextureDescriptor {
             label: None,
-            size: wgpu::Extent3d {
-                width: tw,
-                height: th,
-                depth_or_array_layers: 1,
-            },
+            size: wgpu::Extent3d { width: tw, height: th, depth_or_array_layers: 1 },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -371,10 +308,7 @@ mod tests {
                     view: &view,
                     depth_slice: None,
                     resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::RED),
-                        store: wgpu::StoreOp::Store,
-                    },
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::RED), store: wgpu::StoreOp::Store },
                 })],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
@@ -399,11 +333,7 @@ mod tests {
                     rows_per_image: Some(th),
                 },
             },
-            wgpu::Extent3d {
-                width: tw,
-                height: th,
-                depth_or_array_layers: 1,
-            },
+            wgpu::Extent3d { width: tw, height: th, depth_or_array_layers: 1 },
         );
         queue.submit([enc.finish()]);
         buf.slice(..).map_async(wgpu::MapMode::Read, |_| {});

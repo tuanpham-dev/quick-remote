@@ -92,16 +92,8 @@ impl RvMsg {
             Self::Challenge { nonce } => {
                 w.u8(tag::CHALLENGE).raw(nonce);
             }
-            Self::Register {
-                host_id,
-                cert_der,
-                signature,
-                locals,
-            } => {
-                w.u8(tag::REGISTER)
-                    .str(host_id)
-                    .bytes(cert_der)
-                    .bytes(signature);
+            Self::Register { host_id, cert_der, signature, locals } => {
+                w.u8(tag::REGISTER).str(host_id).bytes(cert_der).bytes(signature);
                 put_strs(&mut w, locals);
             }
             Self::Registered { observed } => {
@@ -111,13 +103,7 @@ impl RvMsg {
                 w.u8(tag::LOOKUP).str(host_id);
                 put_strs(&mut w, locals);
             }
-            Self::Introduce {
-                token,
-                peer_observed,
-                peer_locals,
-                punch_in_ms,
-                initiator,
-            } => {
+            Self::Introduce { token, peer_observed, peer_locals, punch_in_ms, initiator } => {
                 w.u8(tag::INTRODUCE).raw(token).str(peer_observed);
                 put_strs(&mut w, peer_locals);
                 w.u16(*punch_in_ms).bool(*initiator);
@@ -146,10 +132,7 @@ impl RvMsg {
                 locals: get_list(&mut r, |r| r.str())?,
             },
             tag::REGISTERED => Self::Registered { observed: r.str()? },
-            tag::LOOKUP => Self::Lookup {
-                host_id: r.str()?,
-                locals: get_list(&mut r, |r| r.str())?,
-            },
+            tag::LOOKUP => Self::Lookup { host_id: r.str()?, locals: get_list(&mut r, |r| r.str())? },
             tag::INTRODUCE => Self::Introduce {
                 token: r.fixed()?,
                 peer_observed: r.str()?,
@@ -158,14 +141,8 @@ impl RvMsg {
                 initiator: r.bool()?,
             },
             tag::RELAY_REQUEST => Self::RelayRequest { token: r.fixed()? },
-            tag::RELAY_ALLOCATED => Self::RelayAllocated {
-                token: r.fixed()?,
-                relay_addr: r.str()?,
-            },
-            tag::ERROR => Self::Error {
-                code: r.u16()?,
-                text: r.str()?,
-            },
+            tag::RELAY_ALLOCATED => Self::RelayAllocated { token: r.fixed()?, relay_addr: r.str()? },
+            tag::ERROR => Self::Error { code: r.u16()?, text: r.str()? },
             t => return Err(DecodeError::BadTag("rendezvous", t)),
         };
         r.finish()?;

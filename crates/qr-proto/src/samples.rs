@@ -31,20 +31,8 @@ pub fn msgs() -> Vec<(&'static str, Msg)> {
                 want_height: 1080,
                 want_refresh: 60,
                 decoders: vec![
-                    CodecCap {
-                        codec: Codec::H265,
-                        hw: true,
-                        max_width: 4096,
-                        max_height: 2304,
-                        chroma444: false,
-                    },
-                    CodecCap {
-                        codec: Codec::H264,
-                        hw: false,
-                        max_width: 4096,
-                        max_height: 2304,
-                        chroma444: true,
-                    },
+                    CodecCap { codec: Codec::H265, hw: true, max_width: 4096, max_height: 2304, chroma444: false },
+                    CodecCap { codec: Codec::H264, hw: false, max_width: 4096, max_height: 2304, chroma444: true },
                 ],
             },
         ),
@@ -59,36 +47,11 @@ pub fn msgs() -> Vec<(&'static str, Msg)> {
                 rendezvous: "rv.example.net:4500".into(),
             },
         ),
-        (
-            "PairSpake",
-            Msg::PairSpake {
-                data: vec![0x41; 33],
-            },
-        ),
+        ("PairSpake", Msg::PairSpake { data: vec![0x41; 33] }),
         ("PairConfirm", Msg::PairConfirm { mac: [7; 32] }),
-        (
-            "SessionStart",
-            Msg::SessionStart {
-                profile: 1,
-                path: 1,
-                modes: mode::AUDIO | mode::CLIPBOARD,
-            },
-        ),
-        (
-            "Ping",
-            Msg::Ping {
-                seq: 9,
-                t_client: 1_234_567,
-            },
-        ),
-        (
-            "Pong",
-            Msg::Pong {
-                seq: 9,
-                t_client: 1_234_567,
-                t_host: 9_876_543_210,
-            },
-        ),
+        ("SessionStart", Msg::SessionStart { profile: 1, path: 1, modes: mode::AUDIO | mode::CLIPBOARD }),
+        ("Ping", Msg::Ping { seq: 9, t_client: 1_234_567 }),
+        ("Pong", Msg::Pong { seq: 9, t_client: 1_234_567, t_host: 9_876_543_210 }),
         (
             "Feedback",
             Msg::Feedback(Feedback {
@@ -107,20 +70,9 @@ pub fn msgs() -> Vec<(&'static str, Msg)> {
                 present_us: 900,
             }),
         ),
-        (
-            "FrameLost",
-            Msg::FrameLost {
-                stream: 0,
-                frame: 77,
-            },
-        ),
+        ("FrameLost", Msg::FrameLost { stream: 0, frame: 77 }),
         ("KeyframeReq", Msg::KeyframeReq { stream: 1 }),
-        (
-            "SetMode",
-            Msg::SetMode {
-                modes: mode::RELATIVE_MOUSE | mode::SHARP_TEXT,
-            },
-        ),
+        ("SetMode", Msg::SetMode { modes: mode::RELATIVE_MOUSE | mode::SHARP_TEXT }),
         (
             "MonitorList",
             Msg::MonitorList {
@@ -136,13 +88,7 @@ pub fn msgs() -> Vec<(&'static str, Msg)> {
                 }],
             },
         ),
-        (
-            "SelectMonitor",
-            Msg::SelectMonitor {
-                stream: 0,
-                monitor: 1,
-            },
-        ),
+        ("SelectMonitor", Msg::SelectMonitor { stream: 0, monitor: 1 }),
         (
             "StreamStarted",
             Msg::StreamStarted {
@@ -156,51 +102,15 @@ pub fn msgs() -> Vec<(&'static str, Msg)> {
             },
         ),
         ("StreamStop", Msg::StreamStop { stream: 1 }),
-        (
-            "Resize",
-            Msg::Resize {
-                stream: 0,
-                width: 2560,
-                height: 1440,
-                refresh: 120,
-            },
-        ),
-        (
-            "Clipboard",
-            Msg::Clipboard {
-                kind: ClipKind::Text as u8,
-                data: "héllo".as_bytes().to_vec(),
-            },
-        ),
-        (
-            "FileOffer",
-            Msg::FileOffer {
-                id: 5,
-                name: "a.bin".into(),
-                size: 1 << 33,
-                sha256: [0xab; 32],
-            },
-        ),
+        ("Resize", Msg::Resize { stream: 0, width: 2560, height: 1440, refresh: 120 }),
+        ("Clipboard", Msg::Clipboard { kind: ClipKind::Text as u8, data: "héllo".as_bytes().to_vec() }),
+        ("FileOffer", Msg::FileOffer { id: 5, name: "a.bin".into(), size: 1 << 33, sha256: [0xab; 32] }),
         ("FileAccept", Msg::FileAccept { id: 5 }),
-        (
-            "FileCancel",
-            Msg::FileCancel {
-                id: 5,
-                reason: "cancelled".into(),
-            },
-        ),
+        ("FileCancel", Msg::FileCancel { id: 5, reason: "cancelled".into() }),
         ("FileDone", Msg::FileDone { id: 5, ok: true }),
         ("PadAttach", Msg::PadAttach { idx: 2, kind: 1 }),
         ("PadDetach", Msg::PadDetach { idx: 2 }),
-        (
-            "Rumble",
-            Msg::Rumble {
-                idx: 0,
-                strong: 65535,
-                weak: 1000,
-                ms: 200,
-            },
-        ),
+        ("Rumble", Msg::Rumble { idx: 0, strong: 65535, weak: 1000, ms: 200 }),
         (
             "HostStats",
             Msg::HostStats(HostStats {
@@ -215,48 +125,18 @@ pub fn msgs() -> Vec<(&'static str, Msg)> {
                 dropped_by_backpressure: 0,
             }),
         ),
-        (
-            "Error",
-            Msg::Error {
-                code: ErrorCode::PinWrong as u16,
-                text: "That PIN doesn't match.".into(),
-            },
-        ),
+        ("Error", Msg::Error { code: ErrorCode::PinWrong as u16, text: "That PIN doesn't match.".into() }),
         ("Bye", Msg::Bye),
     ]
 }
 
 pub fn inputs() -> Vec<(&'static str, InputEvent)> {
     vec![
-        (
-            "Key",
-            InputEvent::Key {
-                code: 30,
-                down: true,
-            },
-        ),
-        (
-            "Button",
-            InputEvent::Button {
-                button: 3,
-                down: false,
-            },
-        ),
-        (
-            "Abs",
-            InputEvent::Abs {
-                stream: 0,
-                x: 1919,
-                y: 0,
-            },
-        ),
+        ("Key", InputEvent::Key { code: 30, down: true }),
+        ("Button", InputEvent::Button { button: 3, down: false }),
+        ("Abs", InputEvent::Abs { stream: 0, x: 1919, y: 0 }),
         ("Wheel", InputEvent::Wheel { dx: 0, dy: -120 }),
-        (
-            "Text",
-            InputEvent::Text {
-                text: "héllo 漢字".into(),
-            },
-        ),
+        ("Text", InputEvent::Text { text: "héllo 漢字".into() }),
         ("ReleaseAll", InputEvent::ReleaseAll),
         (
             "Pen",
@@ -285,19 +165,8 @@ pub fn rvs() -> Vec<(&'static str, RvMsg)> {
                 locals: vec!["192.168.1.20:9450".into()],
             },
         ),
-        (
-            "Registered",
-            RvMsg::Registered {
-                observed: "203.0.113.7:51000".into(),
-            },
-        ),
-        (
-            "Lookup",
-            RvMsg::Lookup {
-                host_id: "qr-7f3a-91c2-0d4e".into(),
-                locals: vec![],
-            },
-        ),
+        ("Registered", RvMsg::Registered { observed: "203.0.113.7:51000".into() }),
+        ("Lookup", RvMsg::Lookup { host_id: "qr-7f3a-91c2-0d4e".into(), locals: vec![] }),
         (
             "Introduce",
             RvMsg::Introduce {
@@ -309,34 +178,13 @@ pub fn rvs() -> Vec<(&'static str, RvMsg)> {
             },
         ),
         ("RelayRequest", RvMsg::RelayRequest { token: [9; 16] }),
-        (
-            "RelayAllocated",
-            RvMsg::RelayAllocated {
-                token: [9; 16],
-                relay_addr: "203.0.113.1:40007".into(),
-            },
-        ),
-        (
-            "RvError",
-            RvMsg::Error {
-                code: 1,
-                text: "unknown host".into(),
-            },
-        ),
+        ("RelayAllocated", RvMsg::RelayAllocated { token: [9; 16], relay_addr: "203.0.113.1:40007".into() }),
+        ("RvError", RvMsg::Error { code: 1, text: "unknown host".into() }),
     ]
 }
 
 pub fn video_header() -> VideoShardHeader {
-    VideoShardHeader {
-        stream: 0,
-        flags: 1,
-        frame: 4242,
-        block: 1,
-        blocks: 3,
-        shard: 33,
-        k: 32,
-        m: 4,
-    }
+    VideoShardHeader { stream: 0, flags: 1, frame: 4242, block: 1, blocks: 3, shard: 33, k: 32, m: 4 }
 }
 
 pub fn frame_meta() -> FrameMeta {
@@ -375,25 +223,9 @@ pub fn all() -> Vec<Sample> {
     v.push(s(
         "Audio",
         "audio",
-        AudioPacket {
-            mic: false,
-            seq: 10,
-            ts_us: 5_000,
-            data: vec![0xfc, 0xff, 0xfe],
-        }
-        .encode(),
+        AudioPacket { mic: false, seq: 10, ts_us: 5_000, data: vec![0xfc, 0xff, 0xfe] }.encode(),
     ));
-    v.push(s(
-        "Mic",
-        "audio",
-        AudioPacket {
-            mic: true,
-            seq: 1,
-            ts_us: 7,
-            data: vec![1],
-        }
-        .encode(),
-    ));
+    v.push(s("Mic", "audio", AudioPacket { mic: true, seq: 1, ts_us: 7, data: vec![1] }.encode()));
     v.push(s(
         "Motion",
         "motion",
@@ -412,23 +244,8 @@ pub fn all() -> Vec<Sample> {
     v.push(s(
         "Pad",
         "pad",
-        PadState {
-            idx: 1,
-            seq: 8,
-            buttons: 0b101,
-            axes: [-32768, 32767, 0, 100, 0, 32767],
-        }
-        .encode(),
+        PadState { idx: 1, seq: 8, buttons: 0b101, axes: [-32768, 32767, 0, 100, 0, 32767] }.encode(),
     ));
-    v.push(s(
-        "Probe",
-        "probe",
-        Probe {
-            seq: 1,
-            ts_us: 2,
-            pad_len: 3,
-        }
-        .encode(),
-    ));
+    v.push(s("Probe", "probe", Probe { seq: 1, ts_us: 2, pad_len: 3 }.encode()));
     v
 }

@@ -40,8 +40,7 @@ impl Advertiser {
             ("web", web_port.to_string()),
         ];
         // The instance name must be unique on the link: the host ID is.
-        let info =
-            ServiceInfo::new(SERVICE, host_id, &hostname, (), port, &props[..])?.enable_addr_auto();
+        let info = ServiceInfo::new(SERVICE, host_id, &hostname, (), port, &props[..])?.enable_addr_auto();
         let fullname = info.get_fullname().to_string();
         daemon.register(info)?;
         Ok(Self { daemon, fullname })
@@ -72,44 +71,31 @@ impl Browser {
         let daemon = ServiceDaemon::new()?;
         let rx = daemon.browse(SERVICE)?;
         let (tx, out) = tokio::sync::mpsc::unbounded_channel();
-        std::thread::Builder::new()
-            .name("qr-mdns".into())
-            .spawn(move || {
-                while let Ok(ev) = rx.recv() {
-                    let d = match ev {
-                        ServiceEvent::ServiceResolved(s) if s.is_valid() => {
-                            let prop = |k: &str| {
-                                s.txt_properties
-                                    .get_property_val_str(k)
-                                    .unwrap_or("")
-                                    .to_string()
-                            };
-                            let mut ips: Vec<IpAddr> =
-                                s.addresses.iter().map(|a| a.to_ip_addr()).collect();
-                            ips.sort_by_key(|ip| (ip.is_ipv6(), *ip));
-                            Discovery::Up(HostInfo {
-                                name: prop("name"),
-                                host_id: prop("id"),
-                                os: prop("os"),
-                                proto: prop("proto"),
-                                addrs: ips
-                                    .into_iter()
-                                    .map(|ip| SocketAddr::new(ip, s.port))
-                                    .collect(),
-                                web_port: prop("web").parse().unwrap_or(0),
-                                instance: s.fullname.clone(),
-                            })
-                        }
-                        ServiceEvent::ServiceRemoved(_, fullname) => {
-                            Discovery::Down { instance: fullname }
-                        }
-                        _ => continue,
-                    };
-                    if tx.send(d).is_err() {
-                        break;
+        std::thread::Builder::new().name("qr-mdns".into()).spawn(move || {
+            while let Ok(ev) = rx.recv() {
+                let d = match ev {
+                    ServiceEvent::ServiceResolved(s) if s.is_valid() => {
+                        let prop = |k: &str| s.txt_properties.get_property_val_str(k).unwrap_or("").to_string();
+                        let mut ips: Vec<IpAddr> = s.addresses.iter().map(|a| a.to_ip_addr()).collect();
+                        ips.sort_by_key(|ip| (ip.is_ipv6(), *ip));
+                        Discovery::Up(HostInfo {
+                            name: prop("name"),
+                            host_id: prop("id"),
+                            os: prop("os"),
+                            proto: prop("proto"),
+                            addrs: ips.into_iter().map(|ip| SocketAddr::new(ip, s.port)).collect(),
+                            web_port: prop("web").parse().unwrap_or(0),
+                            instance: s.fullname.clone(),
+                        })
                     }
+                    ServiceEvent::ServiceRemoved(_, fullname) => Discovery::Down { instance: fullname },
+                    _ => continue,
+                };
+                if tx.send(d).is_err() {
+                    break;
                 }
-            })?;
+            }
+        })?;
         Ok((Self { daemon }, out))
     }
 }

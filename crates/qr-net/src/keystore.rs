@@ -40,31 +40,20 @@ pub struct KeyStore {
 impl KeyStore {
     pub fn open(path: &Path) -> Result<Self> {
         let peers = match std::fs::read(path) {
-            Ok(b) => {
-                serde_json::from_slice(&b).with_context(|| format!("parsing {}", path.display()))?
-            }
+            Ok(b) => serde_json::from_slice(&b).with_context(|| format!("parsing {}", path.display()))?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
             Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
         };
-        Ok(Self {
-            path: path.to_path_buf(),
-            peers,
-        })
+        Ok(Self { path: path.to_path_buf(), peers })
     }
 
     pub fn in_memory() -> Self {
-        Self {
-            path: PathBuf::new(),
-            peers: Vec::new(),
-        }
+        Self { path: PathBuf::new(), peers: Vec::new() }
     }
 
     /// An unsaved store holding `peers` (lookups only).
     pub fn from_peers(peers: Vec<Peer>) -> Self {
-        Self {
-            path: PathBuf::new(),
-            peers,
-        }
+        Self { path: PathBuf::new(), peers }
     }
 
     pub fn get(&self, fp: &Fingerprint) -> Option<&Peer> {
@@ -102,7 +91,5 @@ impl KeyStore {
 }
 
 pub fn now_unix() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs())
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }

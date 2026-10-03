@@ -54,10 +54,7 @@ impl FramedRecv {
     }
 
     pub async fn recv(&mut self) -> Result<Msg> {
-        let body = self
-            .recv_raw()
-            .await?
-            .ok_or_else(|| anyhow!("control stream closed"))?;
+        let body = self.recv_raw().await?.ok_or_else(|| anyhow!("control stream closed"))?;
         Ok(Msg::decode(&body)?)
     }
 }
@@ -72,19 +69,14 @@ pub struct PeerError {
 
 fn expect_no_error(m: Msg) -> Result<Msg> {
     match m {
-        Msg::Error { code, text } => Err(PeerError {
-            code: ErrorCode::from_u16(code),
-            text,
-        }
-        .into()),
+        Msg::Error { code, text } => Err(PeerError { code: ErrorCode::from_u16(code), text }.into()),
         m => Ok(m),
     }
 }
 
 fn exporter(conn: &quinn::Connection) -> Result<[u8; 32]> {
     let mut out = [0u8; 32];
-    conn.export_keying_material(&mut out, EXPORTER_LABEL, b"")
-        .map_err(|_| anyhow!("TLS exporter unavailable"))?;
+    conn.export_keying_material(&mut out, EXPORTER_LABEL, b"").map_err(|_| anyhow!("TLS exporter unavailable"))?;
     Ok(out)
 }
 
@@ -93,11 +85,7 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 /// Sends an `Error` and finishes the stream, then waits (briefly) until the
 /// peer has read it, so closing the connection doesn't discard it.
 async fn refuse(tx: &mut FramedSend, code: ErrorCode, text: &str) -> Result<()> {
-    tx.send(&Msg::Error {
-        code: code as u16,
-        text: text.into(),
-    })
-    .await?;
+    tx.send(&Msg::Error { code: code as u16, text: text.into() }).await?;
     let _ = tx.0.finish();
     let _ = tokio::time::timeout(Duration::from_secs(2), tx.0.stopped()).await;
     Ok(())
@@ -128,12 +116,9 @@ pub async fn host_handshake(
     pin: &str,
     limiter: &std::sync::Mutex<PinLimiter>,
 ) -> Result<HostSession> {
-    tokio::time::timeout(
-        HANDSHAKE_TIMEOUT,
-        host_handshake_inner(conn, cfg, keystore, pin, limiter),
-    )
-    .await
-    .context("handshake timed out")?
+    tokio::time::timeout(HANDSHAKE_TIMEOUT, host_handshake_inner(conn, cfg, keystore, pin, limiter))
+        .await
+        .context("handshake timed out")?
 }
 
 async fn host_handshake_inner(
@@ -143,27 +128,15 @@ async fn host_handshake_inner(
     pin: &str,
     limiter: &std::sync::Mutex<PinLimiter>,
 ) -> Result<HostSession> {
-    let (tx, rx) = conn
-        .accept_bi()
-        .await
-        .context("waiting for the control stream")?;
+    let (tx, rx) = conn.accept_bi().await.context("waiting for the control stream")?;
     let mut tx = FramedSend(tx);
     let mut rx = FramedRecv(rx);
     let hello = rx.recv().await?;
-    let Msg::Hello {
-        major, ref name, ..
-    } = hello
-    else {
-        bail!("expected Hello, got {hello:?}")
-    };
+    let Msg::Hello { major, ref name, .. } = hello else { bail!("expected Hello, got {hello:?}") };
     if major != PROTO_MAJOR {
         let text = format!(
             "This host runs protocol v{PROTO_MAJOR}; the client runs v{major}. Update the {}.",
-            if major < PROTO_MAJOR {
-                "client"
-            } else {
-                "host"
-            }
+            if major < PROTO_MAJOR { "client" } else { "host" }
         );
         refuse(&mut tx, ErrorCode::VersionMismatch, &text).await?;
         bail!(text);
@@ -171,11 +144,7 @@ async fn host_handshake_inner(
     let cert = peer_cert(conn).ok_or_else(|| anyhow!("client presented no certificate"))?;
     let client_fp = fingerprint(&cert);
     let client_name = name.clone();
-    let paired = keystore
-        .lock()
-        .expect("keystore lock")
-        .get(&client_fp)
-        .is_some();
+    let paired = keystore.lock().expect("keystore lock").get(&client_fp).is_some();
     tx.send(&Msg::HelloAck {
         major: PROTO_MAJOR,
         minor: PROTO_MINOR,
@@ -186,24 +155,12 @@ async fn host_handshake_inner(
     })
     .await?;
     if paired {
-        return Ok(HostSession {
-            control_tx: tx,
-            control_rx: rx,
-            hello,
-            client_fp,
-            client_name,
-            paired_now: false,
-        });
+        return Ok(HostSession { control_tx: tx, control_rx: rx, hello, client_fp, client_name, paired_now: false });
     }
 
     let ip = conn.remote_address().ip();
-    if !limiter
-        .lock()
-        .expect("limiter lock")
-        .allowed(ip, Instant::now())
-    {
-        let text =
-            "Too many wrong PINs from this address. Wait a minute and try again.".to_string();
+    if !limiter.lock().expect("limiter lock").allowed(ip, Instant::now()) {
+        let text = "Too many wrong PINs from this address. Wait a minute and try again.".to_string();
         refuse(&mut tx, ErrorCode::RateLimited, &text).await?;
         bail!(text);
     }
@@ -212,28 +169,16 @@ async fn host_handshake_inner(
     };
     let (state, msg_b) = Pairing::host(pin);
     tx.send(&Msg::PairSpake { data: msg_b }).await?;
-    let t = Transcript {
-        client_fp,
-        host_fp: cfg.id.fingerprint,
-        exporter: exporter(conn)?,
-    };
+    let t = Transcript { client_fp, host_fp: cfg.id.fingerprint, exporter: exporter(conn)? };
     let keys = state.finish(&msg_a, &t);
-    let Msg::PairConfirm { mac } = expect_no_error(rx.recv().await?)? else {
-        bail!("expected PairConfirm")
-    };
+    let Msg::PairConfirm { mac } = expect_no_error(rx.recv().await?)? else { bail!("expected PairConfirm") };
     let Some(keys) = keys.filter(|k| k.check(true, &mac)) else {
-        limiter
-            .lock()
-            .expect("limiter lock")
-            .failure(ip, Instant::now());
+        limiter.lock().expect("limiter lock").failure(ip, Instant::now());
         let text = "That PIN doesn't match. Check the code on the host and try again.".to_string();
         refuse(&mut tx, ErrorCode::PinWrong, &text).await?;
         bail!("client {ip} sent a wrong PIN");
     };
-    tx.send(&Msg::PairConfirm {
-        mac: keys.host_mac(),
-    })
-    .await?;
+    tx.send(&Msg::PairConfirm { mac: keys.host_mac() }).await?;
     limiter.lock().expect("limiter lock").success(ip);
     keystore.lock().expect("keystore lock").upsert(Peer {
         fingerprint: hex(&client_fp),
@@ -244,14 +189,7 @@ async fn host_handshake_inner(
         rendezvous: String::new(),
         clipboard: true,
     })?;
-    Ok(HostSession {
-        control_tx: tx,
-        control_rx: rx,
-        hello,
-        client_fp,
-        client_name,
-        paired_now: true,
-    })
+    Ok(HostSession { control_tx: tx, control_rx: rx, hello, client_fp, client_name, paired_now: true })
 }
 
 pub struct ClientSession {
@@ -289,12 +227,9 @@ pub async fn client_handshake(
     pin: Option<&str>,
     expect_fp: Option<Fingerprint>,
 ) -> Result<ClientSession> {
-    tokio::time::timeout(
-        HANDSHAKE_TIMEOUT,
-        client_handshake_inner(conn, my_fp, hello, keystore, pin, expect_fp),
-    )
-    .await
-    .context("handshake timed out")?
+    tokio::time::timeout(HANDSHAKE_TIMEOUT, client_handshake_inner(conn, my_fp, hello, keystore, pin, expect_fp))
+        .await
+        .context("handshake timed out")?
 }
 
 async fn client_handshake_inner(
@@ -310,32 +245,17 @@ async fn client_handshake_inner(
     if let Some(e) = expect_fp
         && e != host_fp
     {
-        return Err(ClientAuthError::HostKeyMismatch {
-            expected: hex(&e),
-            got: hex(&host_fp),
-        }
-        .into());
+        return Err(ClientAuthError::HostKeyMismatch { expected: hex(&e), got: hex(&host_fp) }.into());
     }
     let (tx, rx) = conn.open_bi().await?;
     let mut tx = FramedSend(tx);
     let mut rx = FramedRecv(rx);
     tx.send(&hello).await?;
     let ack = expect_no_error(rx.recv().await?)?;
-    let Msg::HelloAck {
-        name,
-        host_id,
-        need_pin,
-        rendezvous,
-        ..
-    } = ack
-    else {
+    let Msg::HelloAck { name, host_id, need_pin, rendezvous, .. } = ack else {
         bail!("expected HelloAck, got {ack:?}")
     };
-    let known = keystore
-        .lock()
-        .expect("keystore lock")
-        .get(&host_fp)
-        .is_some();
+    let known = keystore.lock().expect("keystore lock").get(&host_fp).is_some();
     let session = |tx, rx, paired_now| ClientSession {
         control_tx: tx,
         control_rx: rx,
@@ -364,24 +284,11 @@ async fn client_handshake_inner(
     };
     let (state, msg_a) = Pairing::client(pin);
     tx.send(&Msg::PairSpake { data: msg_a }).await?;
-    let Msg::PairSpake { data: msg_b } = expect_no_error(rx.recv().await?)? else {
-        bail!("expected PairSpake")
-    };
-    let t = Transcript {
-        client_fp: my_fp,
-        host_fp,
-        exporter: exporter(conn)?,
-    };
-    let keys = state
-        .finish(&msg_b, &t)
-        .ok_or_else(|| anyhow!("pairing failed"))?;
-    tx.send(&Msg::PairConfirm {
-        mac: keys.client_mac(),
-    })
-    .await?;
-    let Msg::PairConfirm { mac } = expect_no_error(rx.recv().await?)? else {
-        bail!("expected PairConfirm")
-    };
+    let Msg::PairSpake { data: msg_b } = expect_no_error(rx.recv().await?)? else { bail!("expected PairSpake") };
+    let t = Transcript { client_fp: my_fp, host_fp, exporter: exporter(conn)? };
+    let keys = state.finish(&msg_b, &t).ok_or_else(|| anyhow!("pairing failed"))?;
+    tx.send(&Msg::PairConfirm { mac: keys.client_mac() }).await?;
+    let Msg::PairConfirm { mac } = expect_no_error(rx.recv().await?)? else { bail!("expected PairConfirm") };
     if !keys.check(false, &mac) {
         bail!("the host failed pairing confirmation; the connection may be intercepted");
     }

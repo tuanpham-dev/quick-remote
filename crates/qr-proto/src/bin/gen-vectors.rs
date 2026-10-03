@@ -17,9 +17,7 @@ fn main() {
         );
     }
     out += "]\n";
-    let path = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "conformance/vectors.json".into());
+    let path = std::env::args().nth(1).unwrap_or_else(|| "conformance/vectors.json".into());
     std::fs::write(&path, out).expect("write vectors");
     eprintln!("wrote {} vectors to {path}", all.len());
 }

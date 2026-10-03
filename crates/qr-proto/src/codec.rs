@@ -45,9 +45,7 @@ impl Writer {
     }
 
     pub fn with_capacity(n: usize) -> Self {
-        Self {
-            buf: Vec::with_capacity(n),
-        }
+        Self { buf: Vec::with_capacity(n) }
     }
 
     pub fn u8(&mut self, v: u8) -> &mut Self {
@@ -193,10 +191,7 @@ pub fn put_list<T>(w: &mut Writer, items: &[T], mut f: impl FnMut(&mut Writer, &
     }
 }
 
-pub fn get_list<'a, T>(
-    r: &mut Reader<'a>,
-    mut f: impl FnMut(&mut Reader<'a>) -> Result<T>,
-) -> Result<Vec<T>> {
+pub fn get_list<'a, T>(r: &mut Reader<'a>, mut f: impl FnMut(&mut Reader<'a>) -> Result<T>) -> Result<Vec<T>> {
     let n = r.u16()? as usize;
     let mut v = Vec::with_capacity(n.min(1024));
     for _ in 0..n {

@@ -2817,6 +2817,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "x11rb",
 ]
 
 [[package]]
@@ -2846,6 +2847,7 @@ dependencies = [
  "data-encoding",
  "dirs",
  "hmac",
+ "libc",
  "mdns-sd",
  "qr-proto",
  "quinn",

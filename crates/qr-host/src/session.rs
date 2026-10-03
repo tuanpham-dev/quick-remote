@@ -21,9 +21,7 @@ fn is_private(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v) => v.is_private() || v.is_loopback() || v.is_link_local(),
         IpAddr::V6(v) => {
-            v.is_loopback()
-                || (v.segments()[0] & 0xfe00) == 0xfc00
-                || (v.segments()[0] & 0xffc0) == 0xfe80
+            v.is_loopback() || (v.segments()[0] & 0xfe00) == 0xfc00 || (v.segments()[0] & 0xffc0) == 0xfe80
         }
     }
 }
@@ -41,38 +39,15 @@ pub fn pick_profile(forced: Option<Profile>, conn: &quinn::Connection) -> Profil
 }
 
 pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) -> Result<()> {
-    let HostSession {
-        control_tx,
-        mut control_rx,
-        hello,
-        client_name,
-        ..
-    } = hs;
+    let HostSession { control_tx, mut control_rx, hello, client_name, .. } = hs;
     let control_tx = Arc::new(AsyncMutex::new(control_tx));
-    let Msg::Hello {
-        want_width,
-        want_height,
-        want_refresh,
-        decoders,
-        ..
-    } = hello
-    else {
-        unreachable!()
-    };
+    let Msg::Hello { want_width, want_height, want_refresh, decoders, .. } = hello else { unreachable!() };
 
     let Some((enc, _cap)) = choose_encoder(&ctx, &decoders) else {
         let ours: Vec<&str> = ctx.encoders.iter().map(|e| e.codec.name()).collect();
         let theirs: Vec<&str> = decoders.iter().map(|c| c.codec.name()).collect();
-        let text =
-            format!("No common codec: the host encodes {ours:?}, the client decodes {theirs:?}.");
-        send(
-            &control_tx,
-            &Msg::Error {
-                code: ErrorCode::NoCommonCodec as u16,
-                text: text.clone(),
-            },
-        )
-        .await?;
+        let text = format!("No common codec: the host encodes {ours:?}, the client decodes {theirs:?}.");
+        send(&control_tx, &Msg::Error { code: ErrorCode::NoCommonCodec as u16, text: text.clone() }).await?;
         bail!(text);
     };
 
@@ -83,11 +58,7 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
         &control_tx,
         &Msg::SessionStart {
             profile: profile as u8,
-            path: if profile == Profile::Lan {
-                PathKind::Lan
-            } else {
-                PathKind::Direct
-            } as u8,
+            path: if profile == Profile::Lan { PathKind::Lan } else { PathKind::Direct } as u8,
             modes: mode::AUDIO | mode::CLIPBOARD,
         },
     )
@@ -109,13 +80,7 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
     )
     .await?;
 
-    let limits = Limits {
-        width,
-        height,
-        max_fps: fps,
-        min_kbps: 300,
-        max_kbps: ctx.args.max_kbps,
-    };
+    let limits = Limits { width, height, max_fps: fps, min_kbps: 300, max_kbps: ctx.args.max_kbps };
     let mut rate = RateCtl::new(profile, limits, Instant::now());
     if ctx.args.bitrate > 0 {
         rate.target_kbps = ctx.args.bitrate;
@@ -130,6 +95,16 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
         chroma444: false,
     };
     let stream = VideoStream::start(0, &cfg, rate, conn.clone())?;
+    let _audio = match crate::media::start_audio(&ctx, &conn) {
+        Ok(a) => a,
+        Err(e) => {
+            tracing::warn!("audio is off: {e:#}");
+            None
+        }
+    };
+    ctx.input.reset();
+    let dgram_task = tokio::spawn(crate::media::datagram_loop(ctx.clone(), conn.clone()));
+    let uni_task = tokio::spawn(uni_streams(ctx.clone(), conn.clone()));
     send(
         &control_tx,
         &Msg::StreamStarted {
@@ -146,12 +121,7 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
 
     // Stats once a second.
     let stats_task = {
-        let (stream, tx, enc_name, conn2) = (
-            stream.clone(),
-            control_tx.clone(),
-            enc.element.to_string(),
-            conn.clone(),
-        );
+        let (stream, tx, enc_name, conn2) = (stream.clone(), control_tx.clone(), enc.element.to_string(), conn.clone());
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_secs(1));
             tick.tick().await;
@@ -168,8 +138,7 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
                     parity_pct: (stream.parity() * 100.0) as u8,
                     profile: profile as u8,
                     encoder: enc_name.clone(),
-                    capture_us: (c.capture_to_encoded_us.swap(0, Ordering::Relaxed) / frames as u64)
-                        as u32,
+                    capture_us: (c.capture_to_encoded_us.swap(0, Ordering::Relaxed) / frames as u64) as u32,
                     encode_us: (c.encode_us.swap(0, Ordering::Relaxed) / frames as u64) as u32,
                     dropped_by_backpressure: es.skipped,
                 };
@@ -185,14 +154,7 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
                 );
                 if let Some(e) = stream.encoder.error() {
                     tracing::error!("capture/encode failed: {e}");
-                    let _ = send(
-                        &tx,
-                        &Msg::Error {
-                            code: ErrorCode::CaptureFailed as u16,
-                            text: e,
-                        },
-                    )
-                    .await;
+                    let _ = send(&tx, &Msg::Error { code: ErrorCode::CaptureFailed as u16, text: e }).await;
                     break;
                 }
                 if send(&tx, &Msg::HostStats(m)).await.is_err() {
@@ -204,6 +166,9 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
 
     let result = control_loop(&conn, &mut control_rx, &control_tx, &stream).await;
     stats_task.abort();
+    dgram_task.abort();
+    uni_task.abort();
+    ctx.input.release_all();
     tracing::info!(client = %client_name, "session end: {}", result.as_ref().map_or_else(|e| e.to_string(), |_| "bye".into()));
     result
 }
@@ -218,15 +183,7 @@ async fn control_loop(
         let m = rx.recv().await?;
         match m {
             Msg::Ping { seq, t_client } => {
-                send(
-                    tx,
-                    &Msg::Pong {
-                        seq,
-                        t_client,
-                        t_host: qr_net::clock::now_us(),
-                    },
-                )
-                .await?;
+                send(tx, &Msg::Pong { seq, t_client, t_host: qr_net::clock::now_us() }).await?;
             }
             Msg::Feedback(fb) => stream.feedback(&fb),
             Msg::FrameLost { .. } | Msg::KeyframeReq { .. } => {
@@ -234,6 +191,33 @@ async fn control_loop(
             }
             Msg::Bye => return Ok(()),
             other => tracing::debug!(?other, "unhandled control message"),
+        }
+    }
+}
+
+/// Accepts the client's unidirectional streams: input (and files, later).
+async fn uni_streams(ctx: Arc<HostCtx>, conn: quinn::Connection) {
+    while let Ok(mut st) = conn.accept_uni().await {
+        let mut kind = [0u8; 1];
+        if st.read_exact(&mut kind).await.is_err() {
+            continue;
+        }
+        match kind[0] {
+            qr_proto::uni::INPUT => {
+                let ctx = ctx.clone();
+                tokio::spawn(async move {
+                    let mut rx = qr_net::session::FramedRecv(st);
+                    while let Ok(Some(body)) = rx.recv_raw().await {
+                        match qr_proto::InputEvent::decode(&body) {
+                            Ok(ev) => ctx.input.event(&ev),
+                            Err(e) => tracing::debug!("bad input event: {e}"),
+                        }
+                    }
+                    // The stream ended (or broke): nothing stays pressed.
+                    ctx.input.release_all();
+                });
+            }
+            other => tracing::debug!(other, "unknown stream type"),
         }
     }
 }
@@ -256,12 +240,9 @@ fn choose_encoder(ctx: &HostCtx, decoders: &[CodecCap]) -> Option<(probe::Encode
 impl HostCtx {
     pub fn source(&self) -> Source {
         match self.args.source.as_str() {
-            "test" => Source::Test {
-                pattern: "ball".into(),
-            },
-            other => Source::Test {
-                pattern: other.trim_start_matches("test:").into(),
-            },
+            "test" => Source::Test { pattern: "ball".into() },
+            s if s.starts_with("x11:") => Source::X11 { display: s[4..].into(), rect: None },
+            other => Source::Test { pattern: other.trim_start_matches("test:").into() },
         }
     }
 }

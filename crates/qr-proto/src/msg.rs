@@ -335,11 +335,7 @@ mod tag {
 }
 
 fn put_cap(w: &mut Writer, c: &CodecCap) {
-    w.u8(c.codec as u8)
-        .bool(c.hw)
-        .u16(c.max_width)
-        .u16(c.max_height)
-        .bool(c.chroma444);
+    w.u8(c.codec as u8).bool(c.hw).u16(c.max_width).u16(c.max_height).bool(c.chroma444);
 }
 
 fn get_cap(r: &mut Reader) -> Result<CodecCap> {
@@ -353,14 +349,7 @@ fn get_cap(r: &mut Reader) -> Result<CodecCap> {
 }
 
 fn put_monitor(w: &mut Writer, m: &Monitor) {
-    w.u8(m.id)
-        .str(&m.name)
-        .u16(m.width)
-        .u16(m.height)
-        .u32(m.refresh_mhz)
-        .i32(m.x)
-        .i32(m.y)
-        .bool(m.primary);
+    w.u8(m.id).str(&m.name).u16(m.width).u16(m.height).u32(m.refresh_mhz).i32(m.x).i32(m.y).bool(m.primary);
 }
 
 fn get_monitor(r: &mut Reader) -> Result<Monitor> {
@@ -385,33 +374,13 @@ impl Msg {
 
     pub fn encode_into(&self, w: &mut Writer) {
         match self {
-            Msg::Hello {
-                major,
-                minor,
-                name,
-                os,
-                want_width,
-                want_height,
-                want_refresh,
-                decoders,
-            } => {
+            Msg::Hello { major, minor, name, os, want_width, want_height, want_refresh, decoders } => {
                 w.u8(tag::HELLO).u16(*major).u16(*minor).str(name).str(os);
                 w.u16(*want_width).u16(*want_height).u16(*want_refresh);
                 put_list(w, decoders, put_cap);
             }
-            Msg::HelloAck {
-                major,
-                minor,
-                name,
-                host_id,
-                need_pin,
-                rendezvous,
-            } => {
-                w.u8(tag::HELLO_ACK)
-                    .u16(*major)
-                    .u16(*minor)
-                    .str(name)
-                    .str(host_id);
+            Msg::HelloAck { major, minor, name, host_id, need_pin, rendezvous } => {
+                w.u8(tag::HELLO_ACK).u16(*major).u16(*minor).str(name).str(host_id);
                 w.bool(*need_pin).str(rendezvous);
             }
             Msg::PairSpake { data } => {
@@ -420,28 +389,17 @@ impl Msg {
             Msg::PairConfirm { mac } => {
                 w.u8(tag::PAIR_CONFIRM).raw(mac);
             }
-            Msg::SessionStart {
-                profile,
-                path,
-                modes,
-            } => {
+            Msg::SessionStart { profile, path, modes } => {
                 w.u8(tag::SESSION_START).u8(*profile).u8(*path).u32(*modes);
             }
             Msg::Ping { seq, t_client } => {
                 w.u8(tag::PING).u32(*seq).u64(*t_client);
             }
-            Msg::Pong {
-                seq,
-                t_client,
-                t_host,
-            } => {
+            Msg::Pong { seq, t_client, t_host } => {
                 w.u8(tag::PONG).u32(*seq).u64(*t_client).u64(*t_host);
             }
             Msg::Feedback(f) => {
-                w.u8(tag::FEEDBACK)
-                    .u32(f.seq)
-                    .u16(f.window_ms)
-                    .u32(f.bytes_rx);
+                w.u8(tag::FEEDBACK).u32(f.seq).u16(f.window_ms).u32(f.bytes_rx);
                 w.u32(f.shards_rx).u32(f.shards_lost).u32(f.shards_repaired);
                 w.u16(f.frames_rx).u16(f.frames_lost);
                 w.i32(f.delay_min_us).i32(f.delay_max_us).i32(f.delay_slope);
@@ -463,51 +421,21 @@ impl Msg {
             Msg::SelectMonitor { stream, monitor } => {
                 w.u8(tag::SELECT_MONITOR).u8(*stream).u8(*monitor);
             }
-            Msg::StreamStarted {
-                stream,
-                monitor,
-                codec,
-                chroma444,
-                width,
-                height,
-                fps,
-            } => {
-                w.u8(tag::STREAM_STARTED)
-                    .u8(*stream)
-                    .u8(*monitor)
-                    .u8(*codec)
-                    .bool(*chroma444);
+            Msg::StreamStarted { stream, monitor, codec, chroma444, width, height, fps } => {
+                w.u8(tag::STREAM_STARTED).u8(*stream).u8(*monitor).u8(*codec).bool(*chroma444);
                 w.u16(*width).u16(*height).u16(*fps);
             }
             Msg::StreamStop { stream } => {
                 w.u8(tag::STREAM_STOP).u8(*stream);
             }
-            Msg::Resize {
-                stream,
-                width,
-                height,
-                refresh,
-            } => {
-                w.u8(tag::RESIZE)
-                    .u8(*stream)
-                    .u16(*width)
-                    .u16(*height)
-                    .u16(*refresh);
+            Msg::Resize { stream, width, height, refresh } => {
+                w.u8(tag::RESIZE).u8(*stream).u16(*width).u16(*height).u16(*refresh);
             }
             Msg::Clipboard { kind, data } => {
                 w.u8(tag::CLIPBOARD).u8(*kind).bytes(data);
             }
-            Msg::FileOffer {
-                id,
-                name,
-                size,
-                sha256,
-            } => {
-                w.u8(tag::FILE_OFFER)
-                    .u32(*id)
-                    .str(name)
-                    .u64(*size)
-                    .raw(sha256);
+            Msg::FileOffer { id, name, size, sha256 } => {
+                w.u8(tag::FILE_OFFER).u32(*id).str(name).u64(*size).raw(sha256);
             }
             Msg::FileAccept { id } => {
                 w.u8(tag::FILE_ACCEPT).u32(*id);
@@ -524,23 +452,13 @@ impl Msg {
             Msg::PadDetach { idx } => {
                 w.u8(tag::PAD_DETACH).u8(*idx);
             }
-            Msg::Rumble {
-                idx,
-                strong,
-                weak,
-                ms,
-            } => {
+            Msg::Rumble { idx, strong, weak, ms } => {
                 w.u8(tag::RUMBLE).u8(*idx).u16(*strong).u16(*weak).u16(*ms);
             }
             Msg::HostStats(s) => {
-                w.u8(tag::HOST_STATS)
-                    .u8(s.stream)
-                    .u32(s.bitrate_kbps)
-                    .u16(s.fps);
+                w.u8(tag::HOST_STATS).u8(s.stream).u32(s.bitrate_kbps).u16(s.fps);
                 w.u8(s.parity_pct).u8(s.profile).str(&s.encoder);
-                w.u32(s.capture_us)
-                    .u32(s.encode_us)
-                    .u32(s.dropped_by_backpressure);
+                w.u32(s.capture_us).u32(s.encode_us).u32(s.dropped_by_backpressure);
             }
             Msg::Error { code, text } => {
                 w.u8(tag::ERROR).u16(*code).str(text);
@@ -581,20 +499,9 @@ impl Msg {
             },
             tag::PAIR_SPAKE => Msg::PairSpake { data: r.bytes()? },
             tag::PAIR_CONFIRM => Msg::PairConfirm { mac: r.fixed()? },
-            tag::SESSION_START => Msg::SessionStart {
-                profile: r.u8()?,
-                path: r.u8()?,
-                modes: r.u32()?,
-            },
-            tag::PING => Msg::Ping {
-                seq: r.u32()?,
-                t_client: r.u64()?,
-            },
-            tag::PONG => Msg::Pong {
-                seq: r.u32()?,
-                t_client: r.u64()?,
-                t_host: r.u64()?,
-            },
+            tag::SESSION_START => Msg::SessionStart { profile: r.u8()?, path: r.u8()?, modes: r.u32()? },
+            tag::PING => Msg::Ping { seq: r.u32()?, t_client: r.u64()? },
+            tag::PONG => Msg::Pong { seq: r.u32()?, t_client: r.u64()?, t_host: r.u64()? },
             tag::FEEDBACK => Msg::Feedback(Feedback {
                 seq: r.u32()?,
                 window_ms: r.u16()?,
@@ -610,19 +517,11 @@ impl Msg {
                 decode_us: r.u32()?,
                 present_us: r.u32()?,
             }),
-            tag::FRAME_LOST => Msg::FrameLost {
-                stream: r.u8()?,
-                frame: r.u32()?,
-            },
+            tag::FRAME_LOST => Msg::FrameLost { stream: r.u8()?, frame: r.u32()? },
             tag::KEYFRAME_REQ => Msg::KeyframeReq { stream: r.u8()? },
             tag::SET_MODE => Msg::SetMode { modes: r.u32()? },
-            tag::MONITOR_LIST => Msg::MonitorList {
-                monitors: get_list(r, get_monitor)?,
-            },
-            tag::SELECT_MONITOR => Msg::SelectMonitor {
-                stream: r.u8()?,
-                monitor: r.u8()?,
-            },
+            tag::MONITOR_LIST => Msg::MonitorList { monitors: get_list(r, get_monitor)? },
+            tag::SELECT_MONITOR => Msg::SelectMonitor { stream: r.u8()?, monitor: r.u8()? },
             tag::STREAM_STARTED => Msg::StreamStarted {
                 stream: r.u8()?,
                 monitor: r.u8()?,
@@ -633,42 +532,15 @@ impl Msg {
                 fps: r.u16()?,
             },
             tag::STREAM_STOP => Msg::StreamStop { stream: r.u8()? },
-            tag::RESIZE => Msg::Resize {
-                stream: r.u8()?,
-                width: r.u16()?,
-                height: r.u16()?,
-                refresh: r.u16()?,
-            },
-            tag::CLIPBOARD => Msg::Clipboard {
-                kind: r.u8()?,
-                data: r.bytes()?,
-            },
-            tag::FILE_OFFER => Msg::FileOffer {
-                id: r.u32()?,
-                name: r.str()?,
-                size: r.u64()?,
-                sha256: r.fixed()?,
-            },
+            tag::RESIZE => Msg::Resize { stream: r.u8()?, width: r.u16()?, height: r.u16()?, refresh: r.u16()? },
+            tag::CLIPBOARD => Msg::Clipboard { kind: r.u8()?, data: r.bytes()? },
+            tag::FILE_OFFER => Msg::FileOffer { id: r.u32()?, name: r.str()?, size: r.u64()?, sha256: r.fixed()? },
             tag::FILE_ACCEPT => Msg::FileAccept { id: r.u32()? },
-            tag::FILE_CANCEL => Msg::FileCancel {
-                id: r.u32()?,
-                reason: r.str()?,
-            },
-            tag::FILE_DONE => Msg::FileDone {
-                id: r.u32()?,
-                ok: r.bool()?,
-            },
-            tag::PAD_ATTACH => Msg::PadAttach {
-                idx: r.u8()?,
-                kind: r.u8()?,
-            },
+            tag::FILE_CANCEL => Msg::FileCancel { id: r.u32()?, reason: r.str()? },
+            tag::FILE_DONE => Msg::FileDone { id: r.u32()?, ok: r.bool()? },
+            tag::PAD_ATTACH => Msg::PadAttach { idx: r.u8()?, kind: r.u8()? },
             tag::PAD_DETACH => Msg::PadDetach { idx: r.u8()? },
-            tag::RUMBLE => Msg::Rumble {
-                idx: r.u8()?,
-                strong: r.u16()?,
-                weak: r.u16()?,
-                ms: r.u16()?,
-            },
+            tag::RUMBLE => Msg::Rumble { idx: r.u8()?, strong: r.u16()?, weak: r.u16()?, ms: r.u16()? },
             tag::HOST_STATS => Msg::HostStats(HostStats {
                 stream: r.u8()?,
                 bitrate_kbps: r.u32()?,
@@ -680,10 +552,7 @@ impl Msg {
                 encode_us: r.u32()?,
                 dropped_by_backpressure: r.u32()?,
             }),
-            tag::ERROR => Msg::Error {
-                code: r.u16()?,
-                text: r.str()?,
-            },
+            tag::ERROR => Msg::Error { code: r.u16()?, text: r.str()? },
             tag::BYE => Msg::Bye,
             t => return Err(DecodeError::BadTag("message", t)),
         })

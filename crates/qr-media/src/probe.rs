@@ -91,14 +91,8 @@ const PROBE_W: u32 = 256;
 const PROBE_H: u32 = 144;
 
 fn run(desc: &str, appsink_name: &str, timeout: Duration) -> Option<Vec<gst::Sample>> {
-    let pipeline = gst::parse::launch(desc)
-        .ok()?
-        .downcast::<gst::Pipeline>()
-        .ok()?;
-    let sink = pipeline
-        .by_name(appsink_name)?
-        .downcast::<gst_app::AppSink>()
-        .ok()?;
+    let pipeline = gst::parse::launch(desc).ok()?.downcast::<gst::Pipeline>().ok()?;
+    let sink = pipeline.by_name(appsink_name)?.downcast::<gst_app::AppSink>().ok()?;
     pipeline.set_state(gst::State::Playing).ok()?;
     let mut out = Vec::new();
     let deadline = std::time::Instant::now() + timeout;
@@ -108,10 +102,7 @@ fn run(desc: &str, appsink_name: &str, timeout: Duration) -> Option<Vec<gst::Sam
             None if sink.is_eos() => break,
             None => {}
         }
-        if let Some(msg) = pipeline
-            .bus()
-            .and_then(|b| b.pop_filtered(&[gst::MessageType::Error]))
-        {
+        if let Some(msg) = pipeline.bus().and_then(|b| b.pop_filtered(&[gst::MessageType::Error])) {
             tracing::debug!(%desc, ?msg, "probe pipeline error");
             break;
         }
@@ -144,30 +135,14 @@ pub fn encoders() -> Result<Vec<EncoderInfo>> {
             continue;
         }
         let fmt = if hw { "NV12" } else { "I420" };
-        if run(
-            &encode_desc(el, codec, family, fmt),
-            "out",
-            Duration::from_secs(5),
-        )
-        .is_none()
-        {
+        if run(&encode_desc(el, codec, family, fmt), "out", Duration::from_secs(5)).is_none() {
             tracing::debug!(el, "encoder registered but does not work here");
             continue;
         }
-        let chroma444 = run(
-            &encode_desc(el, codec, family, "Y444"),
-            "out",
-            Duration::from_secs(5),
-        )
-        .and_then(|s| s.first().and_then(|s| s.caps().map(|c| c.to_string())))
-        .is_some_and(|c| c.contains("4:4:4") || c.contains("444"));
-        out.push(EncoderInfo {
-            element: el,
-            codec,
-            family,
-            hw,
-            chroma444,
-        });
+        let chroma444 = run(&encode_desc(el, codec, family, "Y444"), "out", Duration::from_secs(5))
+            .and_then(|s| s.first().and_then(|s| s.caps().map(|c| c.to_string())))
+            .is_some_and(|c| c.contains("4:4:4") || c.contains("444"));
+        out.push(EncoderInfo { element: el, codec, family, hw, chroma444 });
     }
     Ok(out)
 }
@@ -187,10 +162,8 @@ pub fn decoders() -> Result<Vec<DecoderInfo>> {
         if gst::ElementFactory::find(el).is_none() {
             continue;
         }
-        let Some(enc) = ENCODERS
-            .iter()
-            .rev()
-            .find(|e| e.1 == codec && !e.3 && gst::ElementFactory::find(e.0).is_some())
+        let Some(enc) =
+            ENCODERS.iter().rev().find(|e| e.1 == codec && !e.3 && gst::ElementFactory::find(e.0).is_some())
         else {
             continue;
         };
@@ -199,11 +172,7 @@ pub fn decoders() -> Result<Vec<DecoderInfo>> {
             encode_desc(enc.0, codec, enc.2, "NV12").replace(" ! appsink name=out sync=false", "")
         );
         if run(&desc, "out", Duration::from_secs(5)).is_some() {
-            out.push(DecoderInfo {
-                element: el,
-                codec,
-                hw,
-            });
+            out.push(DecoderInfo { element: el, codec, hw });
         } else {
             tracing::debug!(el, "decoder registered but does not work here");
         }
@@ -218,13 +187,7 @@ pub fn decoder_caps(decs: &[DecoderInfo]) -> Vec<CodecCap> {
         if caps.iter().any(|c| c.codec == d.codec) {
             continue;
         }
-        caps.push(CodecCap {
-            codec: d.codec,
-            hw: d.hw,
-            max_width: 4096,
-            max_height: 2304,
-            chroma444: !d.hw,
-        });
+        caps.push(CodecCap { codec: d.codec, hw: d.hw, max_width: 4096, max_height: 2304, chroma444: !d.hw });
     }
     caps
 }
@@ -254,23 +217,11 @@ mod tests {
     use super::*;
 
     fn enc(element: &'static str, codec: Codec, hw: bool) -> EncoderInfo {
-        EncoderInfo {
-            element,
-            codec,
-            family: Family::X264,
-            hw,
-            chroma444: false,
-        }
+        EncoderInfo { element, codec, family: Family::X264, hw, chroma444: false }
     }
 
     fn cap(codec: Codec, hw: bool) -> CodecCap {
-        CodecCap {
-            codec,
-            hw,
-            max_width: 4096,
-            max_height: 2304,
-            chroma444: false,
-        }
+        CodecCap { codec, hw, max_width: 4096, max_height: 2304, chroma444: false }
     }
 
     #[test]

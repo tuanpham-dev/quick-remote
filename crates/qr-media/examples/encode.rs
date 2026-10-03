@@ -9,9 +9,7 @@ fn main() -> anyhow::Result<()> {
     for e in encs {
         let cfg = qr_media::encode::EncodeConfig {
             encoder: e.clone(),
-            source: qr_media::encode::Source::Test {
-                pattern: "ball".into(),
-            },
+            source: qr_media::encode::Source::Test { pattern: "ball".into() },
             width: 1920,
             height: 1080,
             fps: 60,
@@ -20,9 +18,8 @@ fn main() -> anyhow::Result<()> {
         };
         let frames = Arc::new(Mutex::new(Vec::new()));
         let f2 = frames.clone();
-        let enc = qr_media::encode::Encoder::start(&cfg, qr_media::ClockMap::new(now), move |f| {
-            f2.lock().unwrap().push(f)
-        })?;
+        let enc =
+            qr_media::encode::Encoder::start(&cfg, qr_media::ClockMap::new(now), move |f| f2.lock().unwrap().push(f))?;
         std::thread::sleep(Duration::from_millis(1000));
         let n_before = frames.lock().unwrap().len();
         enc.force_keyframe();
@@ -34,17 +31,9 @@ fn main() -> anyhow::Result<()> {
         }
         drop(enc);
         let f = frames.lock().unwrap();
-        let keys: Vec<usize> = f
-            .iter()
-            .enumerate()
-            .filter(|(_, x)| x.keyframe)
-            .map(|(i, _)| i)
-            .collect();
+        let keys: Vec<usize> = f.iter().enumerate().filter(|(_, x)| x.keyframe).map(|(i, _)| i).collect();
         let lat: Vec<u64> = f.iter().map(|x| x.encode_end_us - x.capture_us).collect();
-        let enc_t: Vec<u64> = f
-            .iter()
-            .map(|x| x.encode_end_us - x.encode_start_us)
-            .collect();
+        let enc_t: Vec<u64> = f.iter().map(|x| x.encode_end_us - x.encode_start_us).collect();
         let med = |v: &[u64]| {
             let mut v = v.to_vec();
             v.sort();

@@ -1,6 +1,8 @@
 //! QuickRemote host: shares this machine's screen (or a virtual display)
 //! with paired clients.
 
+mod input;
+mod media;
 mod ratectl;
 mod session;
 mod stream;
@@ -21,10 +23,7 @@ use qr_proto::msg::{ErrorCode, Profile};
 use qr_proto::{ALPN, Msg};
 
 #[derive(Parser, Debug)]
-#[command(
-    name = "qr-host",
-    about = "Share this machine with QuickRemote clients"
-)]
+#[command(name = "qr-host", about = "Share this machine with QuickRemote clients")]
 pub struct Args {
     /// UDP address to accept connections on.
     #[arg(long, default_value = "0.0.0.0:9450")]
@@ -70,6 +69,17 @@ pub struct Args {
     /// Print the working encoders and exit.
     #[arg(long)]
     probe: bool,
+    /// Audio to send: `auto`, `none`, `test:<wave>`, `pipewire:<target>`,
+    /// `pulse[:<device>]`, `default`.
+    #[arg(long, default_value = "auto")]
+    audio: String,
+    /// Where the client's microphone goes: `none`, `file:<wav>`,
+    /// `pipewire:<target>`.
+    #[arg(long, default_value = "none")]
+    mic_out: String,
+    /// Input backend: `auto` (from the source), `none`, `xtest:<display>`.
+    #[arg(long, default_value = "auto")]
+    input: String,
 }
 
 impl Args {
@@ -82,10 +92,7 @@ impl Args {
     }
 
     fn size(&self) -> (u32, u32) {
-        self.size
-            .split_once('x')
-            .and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))
-            .unwrap_or((1920, 1080))
+        self.size.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?))).unwrap_or((1920, 1080))
     }
 }
 
@@ -99,57 +106,56 @@ struct Active {
 pub struct HostCtx {
     pub args: Args,
     pub encoders: Vec<EncoderInfo>,
+    pub input: input::Input,
 }
 
 impl HostCtx {
     /// The mode a stream runs at: the configured size for now (virtual
     /// displays follow the client's request once they exist).
     pub fn display_mode(&self, _w: u16, _h: u16, _refresh: u16) -> (u32, u32, u32) {
+        if let Some(display) = self.args.source.strip_prefix("x11:")
+            && let Ok((w, h)) = x11_size(display)
+        {
+            return (w, h, self.args.fps);
+        }
         let (w, h) = self.args.size();
         (w, h, self.args.fps)
     }
 }
 
+/// Size of an X display's first screen.
+fn x11_size(display: &str) -> Result<(u32, u32)> {
+    use x11rb::connection::Connection;
+    let (conn, screen) = x11rb::connect(Some(display))?;
+    let s = &conn.setup().roots[screen];
+    Ok((s.width_in_pixels as u32, s.height_in_pixels as u32))
+}
+
 fn hostname() -> String {
-    std::fs::read_to_string("/etc/hostname")
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|_| "host".into())
+    std::fs::read_to_string("/etc/hostname").map(|s| s.trim().to_string()).unwrap_or_else(|_| "host".into())
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
+        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
     let args = Args::parse();
     qr_net::init_crypto();
+    qr_net::trace::from_env();
     qr_media::init()?;
 
     let encoders = tokio::task::spawn_blocking(probe::encoders).await??;
     if args.probe {
         for e in &encoders {
-            println!(
-                "{:14} {:5} {} 4:4:4={}",
-                e.element,
-                e.codec.name(),
-                if e.hw { "hw" } else { "sw" },
-                e.chroma444
-            );
+            println!("{:14} {:5} {} 4:4:4={}", e.element, e.codec.name(), if e.hw { "hw" } else { "sw" }, e.chroma444);
         }
         return Ok(());
     }
-    anyhow::ensure!(
-        !encoders.is_empty(),
-        "no working video encoder found (install x264 or a GPU driver)"
-    );
+    anyhow::ensure!(!encoders.is_empty(), "no working video encoder found (install x264 or a GPU driver)");
 
     let name = args.name.clone().unwrap_or_else(hostname);
-    let dir = args
-        .config_dir
-        .clone()
-        .unwrap_or_else(|| identity::default_dir("host"));
+    let dir = args.config_dir.clone().unwrap_or_else(|| identity::default_dir("host"));
     let id = Identity::load_or_create(&dir, &name).context("loading the host identity")?;
     let keystore = Arc::new(Mutex::new(KeyStore::open(&dir.join("paired.json"))?));
     let pin = Arc::new(Mutex::new(args.pin.clone().unwrap_or_else(new_pin)));
@@ -173,26 +179,16 @@ async fn main() -> Result<()> {
     println!("LISTEN {addr}");
     println!("PIN {}", pin.lock().expect("lock"));
     for e in &encoders {
-        tracing::info!(
-            element = e.element,
-            codec = e.codec.name(),
-            hw = e.hw,
-            "encoder"
-        );
+        tracing::info!(element = e.element, codec = e.codec.name(), hw = e.hw, "encoder");
     }
 
-    let ctx = Arc::new(HostCtx { args, encoders });
+    let injector = input::open(&args.input, &args.source).context("opening the input backend")?;
+    tracing::info!(backend = injector.name(), "input");
+    let ctx = Arc::new(HostCtx { args, encoders, input: input::Input::new(injector) });
     let active: Arc<tokio::sync::Mutex<Option<Active>>> = Arc::default();
     while let Some(incoming) = ep.accept().await {
-        let (ctx, id, keystore, pin, limiter, active, name) = (
-            ctx.clone(),
-            id.clone(),
-            keystore.clone(),
-            pin.clone(),
-            limiter.clone(),
-            active.clone(),
-            name.clone(),
-        );
+        let (ctx, id, keystore, pin, limiter, active, name) =
+            (ctx.clone(), id.clone(), keystore.clone(), pin.clone(), limiter.clone(), active.clone(), name.clone());
         tokio::spawn(async move {
             let conn = match incoming.await {
                 Ok(c) => c,
@@ -202,14 +198,9 @@ async fn main() -> Result<()> {
                 }
             };
             let peer = conn.remote_address();
-            let cfg = HostConfig {
-                id: &id,
-                name: &name,
-                rendezvous: "",
-            };
+            let cfg = HostConfig { id: &id, name: &name, rendezvous: "" };
             let current_pin = pin.lock().expect("lock").clone();
-            let mut hs = match host_handshake(&conn, &cfg, &keystore, &current_pin, &limiter).await
-            {
+            let mut hs = match host_handshake(&conn, &cfg, &keystore, &current_pin, &limiter).await {
                 Ok(hs) => hs,
                 Err(e) => {
                     tracing::info!(%peer, "refused: {e:#}");
@@ -232,30 +223,18 @@ async fn main() -> Result<()> {
                         old.conn.close(1u32.into(), b"replaced");
                         let mut d = old.done.clone();
                         drop(a);
-                        let _ =
-                            tokio::time::timeout(std::time::Duration::from_secs(3), d.changed())
-                                .await;
+                        let _ = tokio::time::timeout(std::time::Duration::from_secs(3), d.changed()).await;
                         a = active.lock().await;
                     } else {
                         let text = "Another client is connected to this host.".to_string();
-                        let _ = hs
-                            .control_tx
-                            .send(&Msg::Error {
-                                code: ErrorCode::Busy as u16,
-                                text,
-                            })
-                            .await;
+                        let _ = hs.control_tx.send(&Msg::Error { code: ErrorCode::Busy as u16, text }).await;
                         let _ = hs.control_tx.0.finish();
                         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                         return;
                     }
                 }
                 let (tx, rx) = tokio::sync::watch::channel(());
-                *a = Some(Active {
-                    client: hs.client_fp,
-                    conn: conn.clone(),
-                    done: rx,
-                });
+                *a = Some(Active { client: hs.client_fp, conn: conn.clone(), done: rx });
                 tx
             };
             if let Err(e) = session::run(ctx, conn.clone(), hs).await {
@@ -263,9 +242,7 @@ async fn main() -> Result<()> {
             }
             {
                 let mut a = active.lock().await;
-                if a.as_ref()
-                    .is_some_and(|x| x.conn.stable_id() == conn.stable_id())
-                {
+                if a.as_ref().is_some_and(|x| x.conn.stable_id() == conn.stable_id()) {
                     *a = None;
                 }
             }

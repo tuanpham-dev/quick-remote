@@ -27,18 +27,15 @@ pub fn init() -> Result<()> {
 /// access units (H.264/H.265) or OBU temporal units (AV1).
 pub fn encoded_caps(codec: Codec) -> gst::Caps {
     match codec {
-        Codec::H264 => gst::Caps::builder("video/x-h264")
-            .field("stream-format", "byte-stream")
-            .field("alignment", "au")
-            .build(),
-        Codec::H265 => gst::Caps::builder("video/x-h265")
-            .field("stream-format", "byte-stream")
-            .field("alignment", "au")
-            .build(),
-        Codec::Av1 => gst::Caps::builder("video/x-av1")
-            .field("stream-format", "obu-stream")
-            .field("alignment", "tu")
-            .build(),
+        Codec::H264 => {
+            gst::Caps::builder("video/x-h264").field("stream-format", "byte-stream").field("alignment", "au").build()
+        }
+        Codec::H265 => {
+            gst::Caps::builder("video/x-h265").field("stream-format", "byte-stream").field("alignment", "au").build()
+        }
+        Codec::Av1 => {
+            gst::Caps::builder("video/x-av1").field("stream-format", "obu-stream").field("alignment", "tu").build()
+        }
     }
 }
 
@@ -67,9 +64,7 @@ impl ClockMap {
         let a = now_us();
         let g = clock.time().nseconds() / 1000;
         let b = now_us();
-        Self {
-            offset_us: ((a + b) / 2) as i64 - g as i64,
-        }
+        Self { offset_us: ((a + b) / 2) as i64 - g as i64 }
     }
 
     /// A buffer's absolute capture time: `base_time + pts`.
@@ -94,8 +89,7 @@ pub fn set_prop(e: &impl IsA<gst::Object>, name: &str, value: &str) -> bool {
     // both strings are NUL-terminated and outlive it.
     unsafe {
         gst::ffi::gst_util_set_object_arg(
-            ToGlibPtr::<*mut gst::ffi::GstObject>::to_glib_none(obj).0
-                as *mut glib::gobject_ffi::GObject,
+            ToGlibPtr::<*mut gst::ffi::GstObject>::to_glib_none(obj).0 as *mut glib::gobject_ffi::GObject,
             n.as_ptr(),
             v.as_ptr(),
         );

@@ -42,12 +42,7 @@ pub struct VideoStream {
 }
 
 impl VideoStream {
-    pub fn start(
-        id: u8,
-        cfg: &EncodeConfig,
-        rate: RateCtl,
-        conn: quinn::Connection,
-    ) -> Result<Arc<Self>> {
+    pub fn start(id: u8, cfg: &EncodeConfig, rate: RateCtl, conn: quinn::Connection) -> Result<Arc<Self>> {
         let (tx, rx) = mpsc::channel::<EncodedFrame>(4);
         let clock = qr_media::ClockMap::new(qr_net::clock::now_us);
         let encoder = Arc::new(Encoder::start(cfg, clock, move |f| {
@@ -63,15 +58,8 @@ impl VideoStream {
         let counters = Arc::new(StreamCounters::default());
         let parity = Arc::new(AtomicU32::new((rate.parity * 1000.0) as u32));
         let loss = Arc::new(AtomicU32::new((rate.loss_ewma * 1000.0) as u32));
-        let sender = tokio::spawn(send_loop(
-            id,
-            rx,
-            conn,
-            encoder.clone(),
-            counters.clone(),
-            parity.clone(),
-            loss.clone(),
-        ));
+        let sender =
+            tokio::spawn(send_loop(id, rx, conn, encoder.clone(), counters.clone(), parity.clone(), loss.clone()));
         let s = Arc::new(Self {
             id,
             encoder,
@@ -93,10 +81,8 @@ impl VideoStream {
         if r.on_feedback(fb, Instant::now()) {
             self.encoder.set_bitrate(r.target_kbps);
             self.encoder.set_max_fps(r.fps);
-            self.parity
-                .store((r.parity * 1000.0) as u32, Ordering::Relaxed);
-            self.loss
-                .store((r.loss_ewma * 1000.0) as u32, Ordering::Relaxed);
+            self.parity.store((r.parity * 1000.0) as u32, Ordering::Relaxed);
+            self.loss.store((r.loss_ewma * 1000.0) as u32, Ordering::Relaxed);
             tracing::debug!(kbps = r.target_kbps, fps = r.fps, parity = r.parity, "rate");
         }
     }
@@ -169,12 +155,7 @@ async fn send_loop(
             encode_end_us: f.encode_end_us,
             send_us: qr_net::clock::now_us(),
         };
-        let dgrams = pk.frame(
-            frame_id,
-            if f.keyframe { vflags::KEYFRAME } else { 0 },
-            &meta,
-            &f.au,
-        );
+        let dgrams = pk.frame(frame_id, if f.keyframe { vflags::KEYFRAME } else { 0 }, &meta, &f.au);
         frame_id = frame_id.wrapping_add(1);
         let mut bytes = 0u64;
         for d in dgrams {
@@ -186,14 +167,8 @@ async fn send_loop(
         }
         counters.bytes_sent.fetch_add(bytes, Ordering::Relaxed);
         counters.frames_sent.fetch_add(1, Ordering::Relaxed);
-        counters.capture_to_encoded_us.fetch_add(
-            f.encode_end_us.saturating_sub(f.capture_us),
-            Ordering::Relaxed,
-        );
-        counters.encode_us.fetch_add(
-            f.encode_end_us.saturating_sub(f.encode_start_us),
-            Ordering::Relaxed,
-        );
+        counters.capture_to_encoded_us.fetch_add(f.encode_end_us.saturating_sub(f.capture_us), Ordering::Relaxed);
+        counters.encode_us.fetch_add(f.encode_end_us.saturating_sub(f.encode_start_us), Ordering::Relaxed);
         // Hold capture while the datagram queue is more than half full.
         let fill = 1.0 - conn.datagram_send_buffer_space() as f64 / buffer;
         encoder.hold(fill > HOLD_FILL);

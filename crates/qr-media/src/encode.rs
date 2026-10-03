@@ -27,10 +27,7 @@ pub enum Source {
     /// A PipeWire video node, optionally on a portal-provided fd.
     PipeWire { fd: Option<i32>, node: u32 },
     /// An X11 display (`ximagesrc`), optionally one monitor's rectangle.
-    X11 {
-        display: String,
-        rect: Option<(i32, i32, u32, u32)>,
-    },
+    X11 { display: String, rect: Option<(i32, i32, u32, u32)> },
     /// Windows desktop capture (`d3d11screencapturesrc`).
     D3d11 { monitor: i32 },
 }
@@ -95,23 +92,17 @@ pub struct Encoder {
 
 fn source_desc(s: &Source, w: u32, h: u32, fps: u32) -> String {
     match s {
-        Source::Test { pattern } => format!(
-            "videotestsrc is-live=true pattern={pattern} ! video/x-raw,width={w},height={h},framerate={fps}/1"
-        ),
+        Source::Test { pattern } => {
+            format!("videotestsrc is-live=true pattern={pattern} ! video/x-raw,width={w},height={h},framerate={fps}/1")
+        }
         Source::PipeWire { fd, node } => {
             let fd = fd.map(|f| format!(" fd={f}")).unwrap_or_default();
-            format!(
-                "pipewiresrc{fd} path={node} always-copy=false do-timestamp=true keepalive-time=1000"
-            )
+            format!("pipewiresrc{fd} path={node} always-copy=false do-timestamp=true keepalive-time=1000")
         }
         Source::X11 { display, rect } => {
             let r = rect
                 .map(|(x, y, w, h)| {
-                    format!(
-                        " startx={x} starty={y} endx={} endy={}",
-                        x + w as i32 - 1,
-                        y + h as i32 - 1
-                    )
+                    format!(" startx={x} starty={y} endx={} endy={}", x + w as i32 - 1, y + h as i32 - 1)
                 })
                 .unwrap_or_default();
             format!(
@@ -154,9 +145,7 @@ fn configure(e: &gst::Element, f: Family, cfg: &EncodeConfig) {
             set("key-int-max", "100000".into());
             set(
                 "option-string",
-                format!(
-                    "bframes=0:vbv-maxrate={kbps}:vbv-bufsize={frame_kbit}:repeat-headers=1:aud=1"
-                ),
+                format!("bframes=0:vbv-maxrate={kbps}:vbv-bufsize={frame_kbit}:repeat-headers=1:aud=1"),
             );
         }
         Family::OpenH264 => {
@@ -173,10 +162,7 @@ fn configure(e: &gst::Element, f: Family, cfg: &EncodeConfig) {
             set("preset", "12".into());
             set("target-bitrate", kbps.to_string());
             set("intra-period-length", "-1".into());
-            set(
-                "parameters-string",
-                "pred-struct=1:lookahead=0:scd=0".into(),
-            );
+            set("parameters-string", "pred-struct=1:lookahead=0:scd=0".into());
         }
         Family::Va => {
             set("rate-control", "cbr".into());
@@ -234,10 +220,7 @@ fn set_bitrate_prop(e: &gst::Element, f: Family, kbps: u32) {
 
 /// Raw format the encoder is fed.
 fn raw_format(cfg: &EncodeConfig) -> &'static str {
-    let sw = matches!(
-        cfg.encoder.family,
-        Family::X264 | Family::X265 | Family::OpenH264 | Family::SvtAv1
-    );
+    let sw = matches!(cfg.encoder.family, Family::X264 | Family::X265 | Family::OpenH264 | Family::SvtAv1);
     match (cfg.chroma444 && cfg.encoder.chroma444, sw) {
         (true, _) => "Y444",
         (false, true) => "I420",
@@ -267,10 +250,7 @@ impl Encoder {
                     format!("videoconvert ! video/x-raw,format={fmt}")
                 }
             }
-            (
-                Family::Nv | Family::Qsv | Family::Amf | Family::MediaFoundation,
-                Source::D3d11 { .. },
-            ) => {
+            (Family::Nv | Family::Qsv | Family::Amf | Family::MediaFoundation, Source::D3d11 { .. }) => {
                 format!("d3d11convert ! video/x-raw(memory:D3D11Memory),format={fmt}")
             }
             _ => format!("videoconvert n-threads=4 ! video/x-raw,format={fmt}"),
@@ -291,19 +271,11 @@ impl Encoder {
         let enc = pipeline.by_name("enc").expect("named");
         // Repeat SPS/PPS (VPS) on every keyframe so a decoder can join at
         // any IDR.
-        if let Some(p) = enc
-            .static_pad("src")
-            .and_then(|p| p.peer())
-            .and_then(|p| p.parent_element())
-        {
+        if let Some(p) = enc.static_pad("src").and_then(|p| p.peer()).and_then(|p| p.parent_element()) {
             set_prop(&p, "config-interval", "-1");
         }
         configure(&enc, e.family, cfg);
-        let sink = pipeline
-            .by_name("out")
-            .expect("named")
-            .downcast::<gst_app::AppSink>()
-            .expect("appsink");
+        let sink = pipeline.by_name("out").expect("named").downcast::<gst_app::AppSink>().expect("appsink");
 
         let ctl = Arc::new(Control::default());
         ctl.min_interval_us.store(0, Ordering::Relaxed);
@@ -330,10 +302,7 @@ impl Encoder {
                 return gst::PadProbeReturn::Drop;
             }
             c.last_kept_pts_us.store(pts_us, Ordering::Relaxed);
-            let base = pl
-                .upgrade()
-                .and_then(|p| p.base_time())
-                .unwrap_or(gst::ClockTime::ZERO);
+            let base = pl.upgrade().and_then(|p| p.base_time()).unwrap_or(gst::ClockTime::ZERO);
             let capture = clock.to_us(base + pts);
             let now = clock.to_us(gst::SystemClock::obtain().time());
             let mut q = c.inflight.lock().expect("lock");
@@ -356,18 +325,10 @@ impl Encoder {
                     };
                     let (w, h) = sample
                         .caps()
-                        .and_then(|caps| {
-                            caps.structure(0)
-                                .map(|st| (st.get::<i32>("width"), st.get::<i32>("height")))
-                        })
+                        .and_then(|caps| caps.structure(0).map(|st| (st.get::<i32>("width"), st.get::<i32>("height"))))
                         .map(|(w, h)| (w.unwrap_or(0) as u32, h.unwrap_or(0) as u32))
                         .unwrap_or((0, 0));
-                    let (capture, start) = c
-                        .inflight
-                        .lock()
-                        .expect("lock")
-                        .pop_front()
-                        .unwrap_or((end, end));
+                    let (capture, start) = c.inflight.lock().expect("lock").pop_front().unwrap_or((end, end));
                     let map = buf.map_readable().map_err(|_| gst::FlowError::Error)?;
                     c.encoded.fetch_add(1, Ordering::Relaxed);
                     on_frame(EncodedFrame {
@@ -384,9 +345,7 @@ impl Encoder {
                 })
                 .build(),
         );
-        pipeline
-            .set_state(gst::State::Playing)
-            .context("starting the encode pipeline")?;
+        pipeline.set_state(gst::State::Playing).context("starting the encode pipeline")?;
         Ok(Self {
             pipeline,
             enc,
@@ -431,9 +390,7 @@ impl Encoder {
     }
 
     pub fn force_keyframe(&self) {
-        let ev = gstreamer_video::UpstreamForceKeyUnitEvent::builder()
-            .all_headers(true)
-            .build();
+        let ev = gstreamer_video::UpstreamForceKeyUnitEvent::builder().all_headers(true).build();
         if let Some(pad) = self.enc.static_pad("src") {
             pad.send_event(ev);
         }

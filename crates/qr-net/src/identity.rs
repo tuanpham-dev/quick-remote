@@ -20,11 +20,7 @@ pub struct Identity {
 
 impl Clone for Identity {
     fn clone(&self) -> Self {
-        Self {
-            cert: self.cert.clone(),
-            key_pkcs8: self.key_pkcs8.clone(),
-            fingerprint: self.fingerprint,
-        }
+        Self { cert: self.cert.clone(), key_pkcs8: self.key_pkcs8.clone(), fingerprint: self.fingerprint }
     }
 }
 
@@ -45,10 +41,7 @@ pub fn host_id(fp: &Fingerprint) -> String {
 
 /// Default config directory: `~/.config/quickremote/<role>`.
 pub fn default_dir(role: &str) -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("quickremote")
-        .join(role)
+    dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join("quickremote").join(role)
 }
 
 impl Identity {
@@ -56,19 +49,13 @@ impl Identity {
     pub fn generate(name: &str) -> Result<Self> {
         let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256)?;
         let mut params = rcgen::CertificateParams::new(vec!["quickremote".to_string()])?;
-        params
-            .distinguished_name
-            .push(rcgen::DnType::CommonName, name);
+        params.distinguished_name.push(rcgen::DnType::CommonName, name);
         params.not_before = rcgen::date_time_ymd(2025, 1, 1);
         params.not_after = rcgen::date_time_ymd(2125, 1, 1);
         let cert = params.self_signed(&key)?;
         let cert = CertificateDer::from(cert.der().to_vec());
         let fingerprint = fingerprint(&cert);
-        Ok(Self {
-            cert,
-            key_pkcs8: key.serialize_der(),
-            fingerprint,
-        })
+        Ok(Self { cert, key_pkcs8: key.serialize_der(), fingerprint })
     }
 
     /// Loads `identity.der` + `identity.key` from `dir`, creating them on
@@ -77,16 +64,10 @@ impl Identity {
         let cert_path = dir.join("identity.der");
         let key_path = dir.join("identity.key");
         if cert_path.exists() && key_path.exists() {
-            let cert = std::fs::read(&cert_path)
-                .with_context(|| format!("reading {}", cert_path.display()))?;
-            let key = std::fs::read(&key_path)
-                .with_context(|| format!("reading {}", key_path.display()))?;
+            let cert = std::fs::read(&cert_path).with_context(|| format!("reading {}", cert_path.display()))?;
+            let key = std::fs::read(&key_path).with_context(|| format!("reading {}", key_path.display()))?;
             let fingerprint = fingerprint(&cert);
-            return Ok(Self {
-                cert: CertificateDer::from(cert),
-                key_pkcs8: key,
-                fingerprint,
-            });
+            return Ok(Self { cert: CertificateDer::from(cert), key_pkcs8: key, fingerprint });
         }
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
         let id = Self::generate(name)?;
@@ -112,11 +93,7 @@ impl Identity {
             &rng,
         )
         .map_err(|e| anyhow::anyhow!("identity key: {e}"))?;
-        Ok(kp
-            .sign(&rng, msg)
-            .map_err(|e| anyhow::anyhow!("signing: {e}"))?
-            .as_ref()
-            .to_vec())
+        Ok(kp.sign(&rng, msg).map_err(|e| anyhow::anyhow!("signing: {e}"))?.as_ref().to_vec())
     }
 }
 
@@ -126,9 +103,7 @@ pub fn verify(cert_der: &[u8], msg: &[u8], sig: &[u8]) -> bool {
     let Some(spki) = public_key(cert_der) else {
         return false;
     };
-    ring::signature::UnparsedPublicKey::new(&ring::signature::ECDSA_P256_SHA256_ASN1, spki)
-        .verify(msg, sig)
-        .is_ok()
+    ring::signature::UnparsedPublicKey::new(&ring::signature::ECDSA_P256_SHA256_ASN1, spki).verify(msg, sig).is_ok()
 }
 
 /// The uncompressed P-256 point in a certificate's SubjectPublicKeyInfo.
@@ -136,8 +111,8 @@ pub fn verify(cert_der: &[u8], msg: &[u8], sig: &[u8]) -> bool {
 /// (id-ecPublicKey + prime256v1, then the BIT STRING) is enough.
 fn public_key(cert_der: &[u8]) -> Option<&[u8]> {
     const PREFIX: &[u8] = &[
-        0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08,
-        0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00,
+        0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a, 0x86, 0x48,
+        0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00,
     ];
     let at = cert_der.windows(PREFIX.len()).position(|w| w == PREFIX)? + PREFIX.len();
     cert_der.get(at..at + 65)
@@ -149,9 +124,7 @@ fn write_private(path: &Path, data: &[u8]) -> Result<()> {
     opts.write(true).create(true).truncate(true);
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
-    let mut f = opts
-        .open(path)
-        .with_context(|| format!("creating {}", path.display()))?;
+    let mut f = opts.open(path).with_context(|| format!("creating {}", path.display()))?;
     f.write_all(data)?;
     Ok(())
 }
@@ -164,10 +137,7 @@ mod tests {
     fn id_format_and_signatures() {
         let id = Identity::generate("t").unwrap();
         let hid = id.host_id();
-        assert!(
-            hid.starts_with("qr-") && hid.len() == 3 + 4 + 1 + 4 + 1 + 5,
-            "{hid}"
-        );
+        assert!(hid.starts_with("qr-") && hid.len() == 3 + 4 + 1 + 4 + 1 + 5, "{hid}");
         let sig = id.sign(b"hello").unwrap();
         assert!(verify(&id.cert, b"hello", &sig));
         assert!(!verify(&id.cert, b"hellp", &sig));

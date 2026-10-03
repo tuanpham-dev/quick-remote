@@ -19,9 +19,6 @@ fn main() {
             rs.reconstruct_data(&mut opt).unwrap();
         }
         let d = t.elapsed().as_secs_f64() * 1e6 / n as f64;
-        println!(
-            "{k}+{m}: encode {e:.1} µs, decode {} missing {d:.1} µs (incl. clone)",
-            m.min(4)
-        );
+        println!("{k}+{m}: encode {e:.1} µs, decode {} missing {d:.1} µs (incl. clone)", m.min(4));
     }
 }

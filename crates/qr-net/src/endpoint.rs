@@ -53,8 +53,7 @@ pub fn bind_socket(addr: SocketAddr) -> Result<UdpSocket> {
     }
     let _ = s.set_recv_buffer_size(BUFFER);
     let _ = s.set_send_buffer_size(BUFFER);
-    s.bind(&addr.into())
-        .with_context(|| format!("binding UDP {addr}"))?;
+    s.bind(&addr.into()).with_context(|| format!("binding UDP {addr}"))?;
     s.set_nonblocking(true)?;
     Ok(s.into())
 }
@@ -77,24 +76,11 @@ pub fn client_config(id: Option<&Identity>, alpn: &[&[u8]]) -> Result<quinn::Cli
 
 /// An endpoint that accepts (when `server` is set) and connects, with the
 /// device identity as its certificate both ways.
-pub fn endpoint(
-    addr: SocketAddr,
-    id: &Identity,
-    server: bool,
-    alpn: &[&[u8]],
-) -> Result<quinn::Endpoint> {
+pub fn endpoint(addr: SocketAddr, id: &Identity, server: bool, alpn: &[&[u8]]) -> Result<quinn::Endpoint> {
     let socket = bind_socket(addr)?;
-    let server_cfg = if server {
-        Some(server_config(id, alpn)?)
-    } else {
-        None
-    };
-    let mut ep = quinn::Endpoint::new(
-        quinn::EndpointConfig::default(),
-        server_cfg,
-        socket,
-        Arc::new(quinn::TokioRuntime),
-    )?;
+    let server_cfg = if server { Some(server_config(id, alpn)?) } else { None };
+    let mut ep =
+        quinn::Endpoint::new(quinn::EndpointConfig::default(), server_cfg, socket, Arc::new(quinn::TokioRuntime))?;
     ep.set_default_client_config(client_config(Some(id), alpn)?);
     Ok(ep)
 }

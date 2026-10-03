@@ -70,21 +70,11 @@ fn truncation_never_panics() {
 
 #[test]
 fn vectors_file_matches_encoder() {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../conformance/vectors.json"
-    );
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../conformance/vectors.json");
     let text = std::fs::read_to_string(path).expect("conformance/vectors.json exists");
     for s in samples::all() {
         let hex: String = s.bytes.iter().map(|x| format!("{x:02x}")).collect();
-        let needle = format!(
-            "\"name\": \"{}\", \"kind\": \"{}\", \"hex\": \"{hex}\"",
-            s.name, s.kind
-        );
-        assert!(
-            text.contains(&needle),
-            "vector {} is stale; run gen-vectors",
-            s.name
-        );
+        let needle = format!("\"name\": \"{}\", \"kind\": \"{}\", \"hex\": \"{hex}\"", s.name, s.kind);
+        assert!(text.contains(&needle), "vector {} is stale; run gen-vectors", s.name);
     }
 }

@@ -11,10 +11,7 @@ async fn finds_host_within_3s() {
     let t0 = Instant::now();
     let (_b, mut rx) = Browser::start().unwrap();
     loop {
-        let ev = tokio::time::timeout(Duration::from_secs(3), rx.recv())
-            .await
-            .expect("found within 3 s")
-            .unwrap();
+        let ev = tokio::time::timeout(Duration::from_secs(3), rx.recv()).await.expect("found within 3 s").unwrap();
         if let Discovery::Up(h) = ev
             && h.host_id == "qr-test-aaaa-bbbbb"
         {

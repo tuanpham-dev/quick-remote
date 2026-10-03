@@ -37,12 +37,7 @@ pub fn plan(len: usize, max_shard: usize) -> ShardPlan {
     let shard = shard.clamp(2, max_shard);
     let data_shards = len.div_ceil(shard).max(1);
     let blocks = data_shards.div_ceil(k);
-    ShardPlan {
-        shard,
-        data_shards,
-        k,
-        blocks,
-    }
+    ShardPlan { shard, data_shards, k, blocks }
 }
 
 /// Target probability that a block can't be rebuilt.
@@ -81,14 +76,7 @@ pub struct Packetizer {
 
 impl Packetizer {
     pub fn new(stream: u8, max_datagram: usize, parity: f32) -> Self {
-        Self {
-            stream,
-            max_datagram,
-            parity,
-            loss: 0.0,
-            coders: Default::default(),
-            payload: Vec::new(),
-        }
+        Self { stream, max_datagram, parity, loss: 0.0, coders: Default::default(), payload: Vec::new() }
     }
 
     /// Recovery shards for a block of `k` data shards: at least
@@ -110,14 +98,9 @@ impl Packetizer {
     /// Cuts one frame into datagrams, in send order: each block's data
     /// shards, then its parity shards.
     pub fn frame(&mut self, frame_id: u32, flags: u8, meta: &FrameMeta, au: &[u8]) -> Vec<Vec<u8>> {
-        let mut payload = Writer {
-            buf: std::mem::take(&mut self.payload),
-        };
+        let mut payload = Writer { buf: std::mem::take(&mut self.payload) };
         payload.buf.clear();
-        let meta = FrameMeta {
-            len: au.len() as u32,
-            ..*meta
-        };
+        let meta = FrameMeta { len: au.len() as u32, ..*meta };
         meta.write(&mut payload);
         payload.raw(au);
         let p = plan(payload.buf.len(), self.max_datagram - VIDEO_HEADER_LEN);
@@ -149,8 +132,7 @@ impl Packetizer {
             let rs = self.coders.get(k, m);
             let data: Vec<&[u8]> = (0..k).map(shard).collect();
             let mut parity = vec![vec![0u8; p.shard]; m];
-            rs.encode_sep(&data, &mut parity)
-                .expect("shard sizes match");
+            rs.encode_sep(&data, &mut parity).expect("shard sizes match");
             for (j, r) in parity.iter().enumerate() {
                 out.push(datagram(header(k + j), r));
             }
@@ -177,10 +159,7 @@ mod tests {
         assert_eq!(p.parity_for(32), 4);
         p.loss = 0.05;
         let m = p.parity_for(4);
-        assert!(
-            block_failure(4, m, 0.05) <= BLOCK_FAILURE && m >= 3,
-            "m={m}"
-        );
+        assert!(block_failure(4, m, 0.05) <= BLOCK_FAILURE && m >= 3, "m={m}");
         let m = p.parity_for(32);
         assert!(block_failure(32, m, 0.05) <= BLOCK_FAILURE);
         assert!(block_failure(32, m - 1, 0.05) > BLOCK_FAILURE);

@@ -3,6 +3,7 @@
 mod app;
 mod keymap;
 mod render;
+mod script;
 mod session;
 
 use std::net::{SocketAddr, ToSocketAddrs};
@@ -55,25 +56,49 @@ struct Args {
     /// Decoder element to use instead of the best available.
     #[arg(long)]
     decoder: Option<String>,
+    /// Headless: send the input commands in this file (see script.rs).
+    #[arg(long)]
+    script: Option<String>,
+    /// Write `<event> <CLOCK_MONOTONIC µs>` for each input event sent.
+    #[arg(long)]
+    input_trace: Option<String>,
+    /// Host audio output: `default`, `none`, `file:<wav>`.
+    #[arg(long, default_value = "default")]
+    audio_out: String,
+    /// Send a microphone: `default`, `file:<wav>`, `test:<wave>` (off when absent).
+    #[arg(long)]
+    mic: Option<String>,
     /// Requested virtual-display size, `WxH@Hz` (0 = host decides).
     #[arg(long)]
     size: Option<String>,
 }
 
 fn hostname() -> String {
-    std::fs::read_to_string("/etc/hostname")
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|_| "client".into())
+    std::fs::read_to_string("/etc/hostname").map(|s| s.trim().to_string()).unwrap_or_else(|_| "client".into())
+}
+
+fn audio_out(s: &str) -> Option<qr_media::audio::AudioSink> {
+    use qr_media::audio::AudioSink;
+    match s.split_once(':').unwrap_or((s, "")) {
+        ("none", _) => None,
+        ("file", p) => Some(AudioSink::File { path: p.into() }),
+        _ => Some(AudioSink::Default),
+    }
+}
+
+fn mic_source(s: &str) -> qr_media::audio::AudioSource {
+    use qr_media::audio::AudioSource;
+    match s.split_once(':').unwrap_or((s, "")) {
+        ("file", p) => AudioSource::File { path: p.into() },
+        ("test", w) => AudioSource::Test { wave: if w.is_empty() { "sine".into() } else { w.into() } },
+        _ => AudioSource::Default,
+    }
 }
 
 fn parse_size(s: &str) -> (u16, u16, u16) {
     let (wh, hz) = s.split_once('@').unwrap_or((s, "0"));
     let (w, h) = wh.split_once('x').unwrap_or(("0", "0"));
-    (
-        w.parse().unwrap_or(0),
-        h.parse().unwrap_or(0),
-        hz.parse().unwrap_or(0),
-    )
+    (w.parse().unwrap_or(0), h.parse().unwrap_or(0), hz.parse().unwrap_or(0))
 }
 
 async fn list(keystore: &KeyStore, secs: f32) -> Result<()> {
@@ -86,15 +111,8 @@ async fn list(keystore: &KeyStore, secs: f32) -> Result<()> {
             && seen.insert(h.host_id.clone())
         {
             let addr = h.addrs.first().map(|a| a.to_string()).unwrap_or_default();
-            let paired = if keystore.by_host_id(&h.host_id).is_some() {
-                "paired"
-            } else {
-                "not paired"
-            };
-            println!(
-                "  {}  {}  {}  {}  {}",
-                h.name, h.host_id, addr, h.os, paired
-            );
+            let paired = if keystore.by_host_id(&h.host_id).is_some() { "paired" } else { "not paired" };
+            println!("  {}  {}  {}  {}  {}", h.name, h.host_id, addr, h.os, paired);
         }
     }
     println!("Paired:");
@@ -106,10 +124,7 @@ async fn list(keystore: &KeyStore, secs: f32) -> Result<()> {
 
 /// Resolves `--connect`: an address, or a host ID via mDNS and then the
 /// last known address.
-pub async fn resolve(
-    target: &str,
-    keystore: &KeyStore,
-) -> Result<(SocketAddr, Option<qr_net::Fingerprint>)> {
+pub async fn resolve(target: &str, keystore: &KeyStore) -> Result<(SocketAddr, Option<qr_net::Fingerprint>)> {
     if target.starts_with("qr-") {
         let peer = keystore.by_host_id(target);
         let fp = peer.and_then(|p| {
@@ -136,35 +151,25 @@ pub async fn resolve(
         }
         bail!("The host {target} isn't on this network and has no known address.");
     }
-    let addr = if target.contains(':') {
-        target.to_string()
-    } else {
-        format!("{target}:9450")
-    };
+    let addr = if target.contains(':') { target.to_string() } else { format!("{target}:9450") };
     let a = addr
         .to_socket_addrs()
         .with_context(|| format!("resolving {addr}"))?
         .next()
         .ok_or_else(|| anyhow!("no address for {addr}"))?;
-    let fp = keystore
-        .peers
-        .iter()
-        .find(|p| p.last_addr == a.to_string())
-        .and_then(|p| {
-            let b: Vec<u8> = (0..p.fingerprint.len())
-                .step_by(2)
-                .filter_map(|i| u8::from_str_radix(&p.fingerprint[i..i + 2], 16).ok())
-                .collect();
-            b.try_into().ok()
-        });
+    let fp = keystore.peers.iter().find(|p| p.last_addr == a.to_string()).and_then(|p| {
+        let b: Vec<u8> = (0..p.fingerprint.len())
+            .step_by(2)
+            .filter_map(|i| u8::from_str_radix(&p.fingerprint[i..i + 2], 16).ok())
+            .collect();
+        b.try_into().ok()
+    });
     Ok((a, fp))
 }
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
+        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .with_writer(std::io::stderr)
         .init();
     let args = Args::parse();
@@ -173,10 +178,7 @@ fn main() -> Result<()> {
         return tokio::runtime::Runtime::new()?.block_on(cli(args));
     }
     // The window client runs its own runtime next to the event loop.
-    let dir = args
-        .config_dir
-        .clone()
-        .unwrap_or_else(|| identity::default_dir("client"));
+    let dir = args.config_dir.clone().unwrap_or_else(|| identity::default_dir("client"));
     let name = args.name.clone().unwrap_or_else(hostname);
     let id = Identity::load_or_create(&dir, &name)?;
     let keystore = KeyStore::open(&dir.join("paired.json"))?;
@@ -196,20 +198,14 @@ fn main() -> Result<()> {
 
 /// `--list` and `--headless`.
 async fn cli(args: Args) -> Result<()> {
-    let dir = args
-        .config_dir
-        .clone()
-        .unwrap_or_else(|| identity::default_dir("client"));
+    let dir = args.config_dir.clone().unwrap_or_else(|| identity::default_dir("client"));
     let name = args.name.clone().unwrap_or_else(hostname);
     let id = Identity::load_or_create(&dir, &name)?;
     let keystore = Mutex::new(KeyStore::open(&dir.join("paired.json"))?);
     if args.list {
         return list(&keystore.lock().expect("lock"), args.list_secs).await;
     }
-    let target = args
-        .connect
-        .clone()
-        .ok_or_else(|| anyhow!("give --connect ADDR|ID, or --list"))?;
+    let target = args.connect.clone().ok_or_else(|| anyhow!("give --connect ADDR|ID, or --list"))?;
     let (addr, expect_fp) = resolve(&target, &keystore.lock().expect("lock")).await?;
     qr_media::init()?;
     let decoders = tokio::task::spawn_blocking(qr_media::probe::decoders).await??;
@@ -229,6 +225,8 @@ async fn cli(args: Args) -> Result<()> {
         decoders,
         decoder_override: args.decoder.clone(),
         keep_samples: args.latency_log.is_some(),
+        audio_out: audio_out(&args.audio_out),
+        mic: args.mic.as_deref().map(mic_source),
     };
     let c = session::connect(&id, &keystore, opts, sink).await?;
     eprintln!("connected to {} ({})", c.host_name, c.host_id);
@@ -237,6 +235,17 @@ async fn cli(args: Args) -> Result<()> {
         Some(p) => Some(Box::new(std::fs::File::create(p)?)),
         None => None,
     };
+    if let Some(p) = &args.input_trace {
+        qr_net::trace::open(p)?;
+    }
+    if let Some(path) = args.script.clone() {
+        let input = c.input.clone();
+        tokio::spawn(async move {
+            if let Err(e) = script::run(&path, &input).await {
+                tracing::error!("script: {e:#}");
+            }
+        });
+    }
     let start = Instant::now();
     let mut ended = c.ended.clone();
     let mut tick = tokio::time::interval(Duration::from_secs(1));
@@ -253,12 +262,8 @@ async fn cli(args: Args) -> Result<()> {
             _ = ended.changed() => break ended.borrow().clone().unwrap_or_default(),
             _ = tokio::signal::ctrl_c() => break "interrupted".into(),
         }
-        if args
-            .frames
-            .is_some_and(|n| decoded.load(std::sync::atomic::Ordering::Relaxed) >= n)
-            || args
-                .duration
-                .is_some_and(|d| start.elapsed().as_secs_f32() >= d)
+        if args.frames.is_some_and(|n| decoded.load(std::sync::atomic::Ordering::Relaxed) >= n)
+            || args.duration.is_some_and(|d| start.elapsed().as_secs_f32() >= d)
         {
             break "done".into();
         }
@@ -270,10 +275,7 @@ async fn cli(args: Args) -> Result<()> {
         }
     }
     session::bye(&c).await;
-    eprintln!(
-        "decoded {} frames; {reason}",
-        decoded.load(std::sync::atomic::Ordering::Relaxed)
-    );
+    eprintln!("decoded {} frames; {reason}", decoded.load(std::sync::atomic::Ordering::Relaxed));
     if reason != "done" && reason != "interrupted" {
         bail!(reason);
     }

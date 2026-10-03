@@ -35,9 +35,7 @@ impl Coders {
     pub(crate) fn get(&mut self, k: usize, m: usize) -> Arc<ReedSolomon> {
         self.0
             .entry((k, m))
-            .or_insert_with(|| {
-                Arc::new(ReedSolomon::new(k, m).expect("1 <= k, 1 <= m, k + m <= 256"))
-            })
+            .or_insert_with(|| Arc::new(ReedSolomon::new(k, m).expect("1 <= k, 1 <= m, k + m <= 256")))
             .clone()
     }
 }

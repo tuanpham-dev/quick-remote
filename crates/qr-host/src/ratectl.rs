@@ -33,8 +33,7 @@ impl Limits {
     /// Default LAN target: 0.25 bits per pixel per frame (31 Mbit/s at
     /// 1080p60, 124 Mbit/s at 4K60), capped at `max_kbps`.
     pub fn lan_target(&self) -> u32 {
-        ((self.pixels() * self.max_fps as f64 * 0.25 / 1000.0) as u32)
-            .clamp(self.min_kbps, self.max_kbps)
+        ((self.pixels() * self.max_fps as f64 * 0.25 / 1000.0) as u32).clamp(self.min_kbps, self.max_kbps)
     }
 
     /// Below this many bits per frame, lower the frame rate instead
@@ -91,11 +90,7 @@ impl RateCtl {
         let before = (self.target_kbps, self.fps, (self.parity * 100.0) as u32);
         let window = Duration::from_millis(fb.window_ms.max(1) as u64);
         let sent_shards = fb.shards_rx + fb.shards_lost;
-        let loss = if sent_shards > 0 {
-            fb.shards_lost as f32 / sent_shards as f32
-        } else {
-            0.0
-        };
+        let loss = if sent_shards > 0 { fb.shards_lost as f32 / sent_shards as f32 } else { 0.0 };
         self.loss_ewma = self.loss_ewma * 0.8 + loss * 0.2;
         let rx_kbps = (fb.bytes_rx as f64 * 8.0 / window.as_secs_f64() / 1000.0) as u32;
         let beyond_fec = fb.frames_lost > 0;
@@ -107,19 +102,13 @@ impl RateCtl {
                     self.decrease((self.target_kbps as f64 * 0.85) as u32, now);
                 } else if self.may_increase(now) {
                     let cap = self.limits.lan_target();
-                    self.target_kbps =
-                        ((self.target_kbps as f64 * 1.05f64.powf(dt)) as u32 + 1).min(cap);
+                    self.target_kbps = ((self.target_kbps as f64 * 1.05f64.powf(dt)) as u32 + 1).min(cap);
                 }
             }
             Profile::Internet => {
                 // Queueing delay relative to the lowest delay seen recently.
                 let base = match self.base_delay {
-                    Some((d, t))
-                        if now.duration_since(t) < Duration::from_secs(10)
-                            && d <= fb.delay_min_us =>
-                    {
-                        d
-                    }
+                    Some((d, t)) if now.duration_since(t) < Duration::from_secs(10) && d <= fb.delay_min_us => d,
                     _ => {
                         self.base_delay = Some((fb.delay_min_us, now));
                         fb.delay_min_us
@@ -128,34 +117,23 @@ impl RateCtl {
                 let queueing_ms = (fb.delay_max_us - base) as f64 / 1000.0;
                 let rising = fb.delay_slope > 3_000 && queueing_ms > 5.0;
                 if beyond_fec || rising || queueing_ms > 40.0 {
-                    let to = if rx_kbps > 0 {
-                        (rx_kbps as f64 * 0.85) as u32
-                    } else {
-                        self.target_kbps / 2
-                    };
+                    let to = if rx_kbps > 0 { (rx_kbps as f64 * 0.85) as u32 } else { self.target_kbps / 2 };
                     self.decrease(to.min((self.target_kbps as f64 * 0.95) as u32), now);
-                } else if self.may_increase(now) && rx_kbps as f64 >= self.target_kbps as f64 * 0.6
-                {
+                } else if self.may_increase(now) && rx_kbps as f64 >= self.target_kbps as f64 * 0.6 {
                     // Only grow when the stream actually uses the budget;
                     // a still screen sends little and proves nothing. Grow
                     // 8%/s near the last congestion point, 50%/s once the
                     // link has been quiet for 3 s (recovering from a squeeze
                     // at 8%/s alone takes ~40 s).
-                    let quiet = self
-                        .hold_increase_until
-                        .is_none_or(|t| now.duration_since(t) >= Duration::from_millis(2500));
+                    let quiet =
+                        self.hold_increase_until.is_none_or(|t| now.duration_since(t) >= Duration::from_millis(2500));
                     let g: f64 = if quiet { 1.5 } else { 1.08 };
-                    self.target_kbps = ((self.target_kbps as f64 * g.powf(dt)) as u32 + 1)
-                        .min(self.limits.max_kbps);
+                    self.target_kbps = ((self.target_kbps as f64 * g.powf(dt)) as u32 + 1).min(self.limits.max_kbps);
                 }
             }
         }
         // Parity follows loss: twice the observed loss plus 5%.
-        let (lo, hi) = if self.profile == Profile::Lan {
-            (0.10, 0.25)
-        } else {
-            (0.20, 0.50)
-        };
+        let (lo, hi) = if self.profile == Profile::Lan { (0.10, 0.25) } else { (0.20, 0.50) };
         self.parity = (self.loss_ewma * 2.0 + 0.05).clamp(lo, hi);
         self.fit_fps();
         let after = (self.target_kbps, self.fps, (self.parity * 100.0) as u32);
@@ -179,11 +157,7 @@ impl RateCtl {
     fn fit_fps(&mut self) {
         let floor = self.limits.frame_floor_kbit();
         let per_frame = |fps: u32| self.target_kbps as f64 / fps as f64;
-        let steps: Vec<u32> = FPS_STEPS
-            .iter()
-            .copied()
-            .filter(|f| *f <= self.limits.max_fps)
-            .collect();
+        let steps: Vec<u32> = FPS_STEPS.iter().copied().filter(|f| *f <= self.limits.max_fps).collect();
         let mut fps = self.fps.min(self.limits.max_fps);
         // Down while starved.
         while per_frame(fps) < floor {
@@ -209,13 +183,7 @@ mod tests {
     use super::*;
 
     fn limits() -> Limits {
-        Limits {
-            width: 1920,
-            height: 1080,
-            max_fps: 60,
-            min_kbps: 300,
-            max_kbps: 150_000,
-        }
+        Limits { width: 1920, height: 1080, max_fps: 60, min_kbps: 300, max_kbps: 150_000 }
     }
 
     fn fb(bytes_per_50ms: u32, lost: u32, frames_lost: u16, delay: (i32, i32, i32)) -> Feedback {
@@ -242,21 +210,12 @@ mod tests {
         r.on_feedback(&fb(190_000, 0, 1, (0, 0, 0)), t0);
         assert_eq!(r.target_kbps, 26_438);
         // No growth for 500 ms after a cut.
-        r.on_feedback(
-            &fb(190_000, 0, 0, (0, 0, 0)),
-            t0 + Duration::from_millis(200),
-        );
+        r.on_feedback(&fb(190_000, 0, 0, (0, 0, 0)), t0 + Duration::from_millis(200));
         assert_eq!(r.target_kbps, 26_438);
         for i in 0..200 {
-            r.on_feedback(
-                &fb(190_000, 0, 0, (0, 0, 0)),
-                t0 + Duration::from_millis(600 + i * 50),
-            );
+            r.on_feedback(&fb(190_000, 0, 0, (0, 0, 0)), t0 + Duration::from_millis(600 + i * 50));
         }
-        assert_eq!(
-            r.target_kbps, 31_104,
-            "recovers to the LAN target, not beyond"
-        );
+        assert_eq!(r.target_kbps, 31_104, "recovers to the LAN target, not beyond");
     }
 
     #[test]
@@ -277,11 +236,7 @@ mod tests {
             };
             r.on_feedback(&f, t);
         }
-        assert!(
-            (6_000..=10_500).contains(&r.target_kbps),
-            "target {}",
-            r.target_kbps
-        );
+        assert!((6_000..=10_500).contains(&r.target_kbps), "target {}", r.target_kbps);
         assert_eq!(r.fps, 60);
 
         // Squeeze to 1 Mbit/s: frame rate gives way first.
@@ -289,16 +244,7 @@ mod tests {
             t += Duration::from_millis(50);
             let rx = r.target_kbps.min(1_000);
             let over = r.target_kbps > 1_000;
-            let f = fb(
-                rx * 50 / 8,
-                0,
-                0,
-                if over {
-                    (25_000, 90_000, 30_000)
-                } else {
-                    (25_000, 26_000, 0)
-                },
-            );
+            let f = fb(rx * 50 / 8, 0, 0, if over { (25_000, 90_000, 30_000) } else { (25_000, 26_000, 0) });
             r.on_feedback(&f, t);
         }
         assert!(r.target_kbps <= 1_100, "target {}", r.target_kbps);
@@ -310,10 +256,7 @@ mod tests {
         let t0 = Instant::now();
         let mut r = RateCtl::new(Profile::Internet, limits(), t0);
         for i in 0..40 {
-            r.on_feedback(
-                &fb(10_000, 10, 0, (0, 0, 0)),
-                t0 + Duration::from_millis(i * 50),
-            );
+            r.on_feedback(&fb(10_000, 10, 0, (0, 0, 0)), t0 + Duration::from_millis(i * 50));
         }
         // 10 lost of 110 sent: 9.1% loss → 2 × 9.1% + 5% = 23%.
         assert!((0.22..=0.24).contains(&r.parity), "parity {}", r.parity);
