@@ -59,6 +59,14 @@ impl KeyStore {
         }
     }
 
+    /// An unsaved store holding `peers` (lookups only).
+    pub fn from_peers(peers: Vec<Peer>) -> Self {
+        Self {
+            path: PathBuf::new(),
+            peers,
+        }
+    }
+
     pub fn get(&self, fp: &Fingerprint) -> Option<&Peer> {
         let h = hex(fp);
         self.peers.iter().find(|p| p.fingerprint == h)

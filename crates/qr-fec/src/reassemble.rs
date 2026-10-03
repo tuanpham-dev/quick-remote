@@ -219,6 +219,19 @@ impl Reassembler {
                 .next()
                 .is_some_and(|(_, later)| now.duration_since(later.first_seen) >= self.deadline);
             if overdue {
+                if let Some(f) = self.frames.get(&self.next) {
+                    let blocks: Vec<String> = f
+                        .blocks
+                        .iter()
+                        .map(|b| {
+                            b.as_ref()
+                                .map_or("-".into(), |b| format!("{}/{}+{}", b.have, b.k, b.m))
+                        })
+                        .collect();
+                    tracing::debug!(frame = self.next, ?blocks, "frame lost");
+                } else {
+                    tracing::debug!(frame = self.next, "frame lost: no shard arrived");
+                }
                 self.stats.frames_lost += 1;
                 out.push(Event::Lost { id: self.next });
                 if let Some(f) = self.frames.get_mut(&self.next) {

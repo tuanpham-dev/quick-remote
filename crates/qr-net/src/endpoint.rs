@@ -25,6 +25,18 @@ pub fn transport_config() -> quinn::TransportConfig {
     t.max_concurrent_uni_streams(64u32.into());
     t.max_concurrent_bidi_streams(8u32.into());
     t.initial_rtt(Duration::from_millis(10));
+    // Fixed 1200-byte packets. With path-MTU discovery, random loss can
+    // trigger black-hole detection, which lowers the MTU and silently drops
+    // queued video datagrams sized for the larger one (measured: half of
+    // every frame lost at 5% random loss). A 20% higher packet rate on
+    // gigabit LANs is the cheaper price.
+    t.mtu_discovery_config(None);
+    // QR_GSO=0 turns off UDP segmentation offload. Tests need it: netem
+    // drops a GSO batch (up to ~10 datagrams) as one packet, turning random
+    // loss into bursts that real links don't have.
+    if std::env::var("QR_GSO").is_ok_and(|v| v == "0") {
+        t.enable_segmentation_offload(false);
+    }
     let mut bbr = quinn::congestion::BbrConfig::default();
     bbr.initial_window(1024 * 1024);
     t.congestion_controller_factory(Arc::new(bbr));

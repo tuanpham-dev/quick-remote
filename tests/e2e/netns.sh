@@ -13,7 +13,7 @@
 #
 # Topologies:
 #   lan        host —— client: 1 Gbit/s, 0.1 ms each way, 10.77.0.1 / .2
-#   wan        host —— router —— client: 10 Mbit/s, 25 ms each way, 0.5% loss each way
+#   wan        host —— router —— client: 10 Mbit/s, 50 ms RTT, 1% loss host→client (0.5% per hop)
 #   nat-cone   host — natH — inet(relay) — natC — client, port-preserving NAT
 #   nat-sym    the same with fully random NAT ports (symmetric)
 set -euo pipefail
@@ -116,7 +116,7 @@ wan)
 	node router
 	node client
 	link host eth0 10.10.1.2/24 router eth1 10.10.1.1/24 rate 10mbit delay 25ms loss 0.5% limit 10000
-	link client eth0 10.10.2.2/24 router eth2 10.10.2.1/24 rate 10mbit delay 0.01ms limit 10000
+	link client eth0 10.10.2.2/24 router eth2 10.10.2.1/24 rate 10mbit delay 0.01ms loss 0.5% limit 10000
 	router router
 	on host ip route add default via 10.10.1.1
 	on client ip route add default via 10.10.2.1

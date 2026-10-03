@@ -1,5 +1,5 @@
 use qr_proto::Writer;
-use qr_proto::datagram::{FRAME_META_LEN, FrameMeta, VIDEO_HEADER_LEN, VideoShardHeader};
+use qr_proto::datagram::{FrameMeta, VIDEO_HEADER_LEN, VideoShardHeader};
 
 use crate::MAX_K;
 
@@ -45,13 +45,36 @@ pub fn plan(len: usize, max_shard: usize) -> ShardPlan {
     }
 }
 
+/// Target probability that a block can't be rebuilt.
+pub const BLOCK_FAILURE: f64 = 1e-3;
+
+/// P(more than `m` of `k + m` shards lost) with independent loss `p`.
+pub fn block_failure(k: usize, m: usize, p: f64) -> f64 {
+    if p <= 0.0 {
+        return 0.0;
+    }
+    let n = k + m;
+    let q = 1.0 - p;
+    // Sum P(X = i) for i ≤ m, then take the complement.
+    let mut term = q.powi(n as i32);
+    let mut ok = 0.0;
+    for i in 0..=m {
+        ok += term;
+        term *= (n - i) as f64 / (i + 1) as f64 * p / q;
+    }
+    (1.0 - ok).max(0.0)
+}
+
 /// Builds video datagrams for one stream.
 pub struct Packetizer {
     pub stream: u8,
     /// Largest datagram the path carries (QUIC's current max datagram size).
     pub max_datagram: usize,
-    /// Parity shards per data shard, e.g. 0.1 for 10%.
+    /// Minimum parity shards per data shard, e.g. 0.1 for 10%.
     pub parity: f32,
+    /// Estimated independent packet loss; parity grows until a block fails
+    /// with probability under [`BLOCK_FAILURE`].
+    pub loss: f32,
     coders: crate::Coders,
     payload: Vec<u8>,
 }
@@ -62,17 +85,26 @@ impl Packetizer {
             stream,
             max_datagram,
             parity,
+            loss: 0.0,
             coders: Default::default(),
             payload: Vec::new(),
         }
     }
 
-    /// Recovery shards for a block of `k` data shards.
+    /// Recovery shards for a block of `k` data shards: at least
+    /// `k × parity`, and enough that with loss `loss` the block is
+    /// unrecoverable with probability below [`BLOCK_FAILURE`]. A flat ratio
+    /// alone fails small blocks: 4 + 1 shards at 5% loss fail 2.3% of the
+    /// time.
     pub fn parity_for(&self, k: usize) -> usize {
-        if self.parity <= 0.0 {
+        if self.parity <= 0.0 && self.loss <= 0.0 {
             return 0;
         }
-        ((k as f32 * self.parity).ceil() as usize).clamp(1, 255 - k)
+        let mut m = ((k as f32 * self.parity).ceil() as usize).max(1);
+        while m < 255 - k && block_failure(k, m, self.loss as f64) > BLOCK_FAILURE {
+            m += 1;
+        }
+        m.min(255 - k)
     }
 
     /// Cuts one frame into datagrams, in send order: each block's data
@@ -138,6 +170,22 @@ fn datagram(h: VideoShardHeader, shard: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parity_meets_failure_target() {
+        let mut p = Packetizer::new(0, 1200, 0.1);
+        assert_eq!(p.parity_for(32), 4);
+        p.loss = 0.05;
+        let m = p.parity_for(4);
+        assert!(
+            block_failure(4, m, 0.05) <= BLOCK_FAILURE && m >= 3,
+            "m={m}"
+        );
+        let m = p.parity_for(32);
+        assert!(block_failure(32, m, 0.05) <= BLOCK_FAILURE);
+        assert!(block_failure(32, m - 1, 0.05) > BLOCK_FAILURE);
+        assert!((block_failure(1, 0, 0.1) - 0.1).abs() < 1e-12);
+    }
 
     #[test]
     fn plan_fits_mtu_and_blocks() {
