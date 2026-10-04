@@ -10,6 +10,7 @@ qr-fec.workspace = true
 qr-net.workspace = true
 qr-media.workspace = true
 qr-clip.workspace = true
+evdev = "0.13"
 anyhow.workspace = true
 rand.workspace = true
 bytes.workspace = true
@@ -32,3 +33,6 @@ sha2.workspace = true
 qr-pair.workspace = true
 rustls.workspace = true
 time = "0.3"
+
+[target.'cfg(windows)'.dependencies]
+qr-win = { path = "../qr-win" }

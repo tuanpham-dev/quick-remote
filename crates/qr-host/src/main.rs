@@ -8,6 +8,8 @@ mod outbox;
 mod ratectl;
 mod session;
 mod stream;
+#[cfg(target_os = "linux")]
+mod uinput;
 mod web;
 
 use std::net::SocketAddr;

@@ -616,6 +616,7 @@ impl ApplicationHandler<UserEvent> for App {
             }
             UserEvent::Discovery(d) => self.hosts.apply(d),
             UserEvent::Connected(c) => {
+                crate::start_pads(&c);
                 self.session = Some(c);
                 self.screen = Screen::Session;
                 self.update_title();

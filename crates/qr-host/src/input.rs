@@ -24,6 +24,17 @@ pub trait Injector: Send {
     fn pen(&mut self, _x: u32, _y: u32, _pressure: u16, _tilt: (i8, i8), _flags: u8) -> Result<()> {
         Ok(())
     }
+    /// Full state of client pad `idx` (attaches a virtual pad on first use).
+    fn pad(&mut self, _idx: u8, _buttons: u32, _axes: [i16; 6]) -> Result<()> {
+        Ok(())
+    }
+    fn pad_detach(&mut self, _idx: u8) -> Result<()> {
+        Ok(())
+    }
+    /// Rumble requested by games since the last call: (pad, strong, weak).
+    fn take_rumble(&mut self) -> Vec<(u8, u16, u16)> {
+        Vec::new()
+    }
     fn name(&self) -> &'static str;
 }
 
@@ -248,6 +259,13 @@ pub mod xtest {
         }
     }
 
+    /// The size of `display`'s first screen.
+    pub fn screen_size(display: &str) -> Result<(u16, u16)> {
+        let (conn, screen) = x11rb::connect(Some(display))?;
+        let s = &conn.setup().roots[screen];
+        Ok((s.width_in_pixels, s.height_in_pixels))
+    }
+
     /// The pointer position on `display` (tests).
     pub fn pointer(display: &str) -> Result<(i16, i16)> {
         let (conn, screen) = x11rb::connect(Some(display))?;
@@ -265,6 +283,7 @@ pub struct InputState {
     held_buttons: HashSet<u8>,
     motion_seq: Option<u32>,
     rel: (i64, i64),
+    pad_seq: std::collections::HashMap<u8, u32>,
 }
 
 pub struct Input {
@@ -342,6 +361,26 @@ impl Input {
         }
     }
 
+    /// Applies a pad snapshot, newest by `seq` only.
+    pub fn pad(&self, p: &PadState) {
+        {
+            let mut st = self.state.lock().expect("lock");
+            let last = st.pad_seq.entry(p.idx).or_insert(0);
+            if *last != 0 && p.seq.wrapping_sub(*last) > u32::MAX / 2 {
+                return;
+            }
+            *last = p.seq;
+        }
+        if let Err(e) = self.injector.lock().expect("lock").pad(p.idx, p.buttons, p.axes) {
+            tracing::debug!("pad injection failed: {e:#}");
+        }
+    }
+
+    pub fn pad_detach(&self, idx: u8) {
+        self.state.lock().expect("lock").pad_seq.remove(&idx);
+        let _ = self.injector.lock().expect("lock").pad_detach(idx);
+    }
+
     /// Releases every held key and button (session start and end).
     pub fn release_all(&self) {
         let mut st = self.state.lock().expect("lock");
@@ -388,7 +427,7 @@ pub fn datagram(ctx: &HostCtx, d: &[u8]) {
         }
         Some(&kind::PAD) => {
             if let Ok(p) = PadState::decode(d) {
-                tracing::trace!(?p, "pad state (gamepads arrive with T1.19)");
+                ctx.input.pad(&p);
             }
         }
         _ => {}
@@ -401,10 +440,139 @@ pub fn open(spec: &str, source: &str) -> Result<Box<dyn Injector>> {
     Ok(match kind {
         "none" => Box::new(NoInput),
         "xtest" => Box::new(xtest::XTest::open(if arg.is_empty() { ":0" } else { arg })?),
+        #[cfg(target_os = "linux")]
+        "uinput" => {
+            let (w, h) =
+                arg.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?))).unwrap_or((1920, 1080));
+            Box::new(crate::uinput::Uinput::open(w, h)?)
+        }
+        #[cfg(windows)]
+        "auto" | "windows" => Box::new(win::Win::new(source)),
+        #[cfg(not(windows))]
         "auto" => match source.split_once(':') {
-            Some(("x11", display)) => Box::new(xtest::XTest::open(display)?),
+            Some(("x11", display)) => {
+                let x = xtest::XTest::open(display)?;
+                // Pads and pen need uinput; without it they're dropped.
+                #[cfg(target_os = "linux")]
+                {
+                    let (w, h) = xtest::screen_size(display).unwrap_or((1920, 1080));
+                    match crate::uinput::Uinput::open(w as i32, h as i32) {
+                        Ok(u) => return Ok(Box::new(Split { main: Box::new(x), devices: Box::new(u) })),
+                        Err(e) => tracing::warn!("gamepads and pen are off: {e:#}"),
+                    }
+                }
+                Box::new(x)
+            }
             _ => Box::new(NoInput),
         },
-        other => bail!("unknown --input backend {other} (none, xtest:<display>)"),
+        other => bail!("unknown --input backend {other} (none, xtest:<display>, uinput[:WxH])"),
     })
+}
+
+/// Windows: SendInput, synthetic pen, ViGEmBus pads (crate qr-win).
+#[cfg(windows)]
+mod win {
+    use super::*;
+    use qr_win::inject::{Injector as WinInjector, Rect};
+
+    pub struct Win(WinInjector);
+
+    impl Win {
+        /// `source` is `d3d11:<monitor index>`; the monitor's rectangle maps
+        /// stream pixels onto the virtual desktop.
+        pub fn new(_source: &str) -> Self {
+            // The primary monitor at the origin until monitor enumeration
+            // (T4.3) supplies the rectangle.
+            Win(WinInjector::new(Rect { x: 0, y: 0, w: 0, h: 0 }))
+        }
+    }
+
+    impl Injector for Win {
+        fn key(&mut self, code: u16, down: bool) -> Result<()> {
+            self.0.key(code, down)
+        }
+        fn button(&mut self, b: u8, down: bool) -> Result<()> {
+            self.0.button(b, down)
+        }
+        fn abs(&mut self, x: u16, y: u16) -> Result<()> {
+            self.0.abs(x, y)
+        }
+        fn rel(&mut self, dx: i32, dy: i32) -> Result<()> {
+            self.0.rel(dx, dy)
+        }
+        fn wheel(&mut self, dx: i32, dy: i32) -> Result<()> {
+            self.0.wheel(dx, dy)
+        }
+        fn text(&mut self, text: &str) -> Result<()> {
+            self.0.text(text)
+        }
+        fn pen(&mut self, x: u32, y: u32, pressure: u16, tilt: (i8, i8), flags: u8) -> Result<()> {
+            self.0.pen(x, y, pressure, tilt, flags)
+        }
+        fn pad(&mut self, idx: u8, buttons: u32, axes: [i16; 6]) -> Result<()> {
+            match self.0.pads.as_mut() {
+                Some(p) => p.update(idx, buttons, axes),
+                None => Ok(()),
+            }
+        }
+        fn pad_detach(&mut self, idx: u8) -> Result<()> {
+            match self.0.pads.as_mut() {
+                Some(p) => p.detach(idx),
+                None => Ok(()),
+            }
+        }
+        fn take_rumble(&mut self) -> Vec<(u8, u16, u16)> {
+            let Some(p) = self.0.pads.as_ref() else { return Vec::new() };
+            let mut q = p.rumble.lock().expect("lock");
+            q.drain(..).map(|(i, s, w)| (i, s as u16 * 257, w as u16 * 257)).collect()
+        }
+        fn name(&self) -> &'static str {
+            "windows"
+        }
+    }
+}
+
+/// Keyboard, mouse and text through one backend (XTest), pads and pen
+/// through another (uinput).
+#[cfg(not(windows))]
+struct Split {
+    main: Box<dyn Injector>,
+    devices: Box<dyn Injector>,
+}
+
+#[cfg(not(windows))]
+impl Injector for Split {
+    fn key(&mut self, code: u16, down: bool) -> Result<()> {
+        self.main.key(code, down)
+    }
+    fn button(&mut self, b: u8, down: bool) -> Result<()> {
+        self.main.button(b, down)
+    }
+    fn abs(&mut self, x: u16, y: u16) -> Result<()> {
+        self.main.abs(x, y)
+    }
+    fn rel(&mut self, dx: i32, dy: i32) -> Result<()> {
+        self.main.rel(dx, dy)
+    }
+    fn wheel(&mut self, dx: i32, dy: i32) -> Result<()> {
+        self.main.wheel(dx, dy)
+    }
+    fn text(&mut self, text: &str) -> Result<()> {
+        self.main.text(text)
+    }
+    fn pen(&mut self, x: u32, y: u32, pressure: u16, tilt: (i8, i8), flags: u8) -> Result<()> {
+        self.devices.pen(x, y, pressure, tilt, flags)
+    }
+    fn pad(&mut self, idx: u8, buttons: u32, axes: [i16; 6]) -> Result<()> {
+        self.devices.pad(idx, buttons, axes)
+    }
+    fn pad_detach(&mut self, idx: u8) -> Result<()> {
+        self.devices.pad_detach(idx)
+    }
+    fn take_rumble(&mut self) -> Vec<(u8, u16, u16)> {
+        self.devices.take_rumble()
+    }
+    fn name(&self) -> &'static str {
+        "xtest+uinput"
+    }
 }

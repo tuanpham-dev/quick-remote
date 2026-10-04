@@ -400,11 +400,12 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
 **Goal:** the host and native client build and run on Windows.
 **Checkpoint:** `cargo check --target x86_64-pc-windows-msvc` (cargo-xwin) passes in CI here. **Hardware gate:** A26, A30 and A31 (Windows parts) on a Windows PC.
 
-- [ ] **T4.1 — virtual gamepad driver decision**
+- [x] **T4.1 — virtual gamepad driver decision**
   - Files: `plans/quick-remote.md` (record the decision)
   - Do: compare ViGEmBus (archived, signed, widely installed) with a VHF-based or UMDF HID minidriver (needs signing). Ask the user and record the choice.
   - Depends on: —
   - Done when: a decision is recorded here.
+  - **Decision (2026-10-03, user):** ViGEmBus. The user installs it once, and QuickRemote loads `ViGEmClient.dll` at run time. If the driver is missing, the host logs that and continues without gamepads.
 - [ ] **T4.2 — cross-compile setup**
   - Files: `scripts/xwin-check.sh`, `.cargo/config.toml`
   - Do: `cargo install cargo-xwin`. GStreamer MSVC dev libraries come from the official `gstreamer-1.0-devel-msvc-x86_64` package, extracted with `msiextract` or `7z`; `PKG_CONFIG_PATH` points at them for the target.
@@ -509,6 +510,7 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
 - T1.4: FEC uses GF(2^8) Reed-Solomon (`reed-solomon-erasure`) instead of `reed-solomon-simd`, because the latter's decoder costs about 350 µs per block. Measured throughput is 0.7–1.3 GB/s (packetize + reassemble), not the 2 GB/s first guessed, which is about 0.14 ms per 100 KB frame. Per-block parity is sized from the measured loss so a block fails with probability under 0.1%.
 - T1.6: path-MTU discovery is off (fixed 1200-byte packets). Black-hole detection under random loss was dropping queued video datagrams. Tests run with `QR_GSO=0`, because netem drops a whole GSO batch at once.
 - T1.24: the encoder bitrate is scaled by source fps ÷ capped fps; capture hold is re-checked every 5 ms; growth is 50%/s after 3 quiet seconds. A10 and A11 pass on the 60–90 s runs; the full 180 s run is still to do.
+- A8 (loopback, 2026-10-03): 1080p60, VA-API H.264 → VA-API decode, 2 minutes (6,898 frames). Capture → decoded p50 6.58 ms, p95 7.94 ms, p99 10.04 ms, longest gap 29 ms. Split: capture 0.18, encode 3.18, network 0.18, decode 2.73 ms. Not yet the full A8: the run used loopback instead of the simulated gigabit LAN (GPU in user namespaces needs the render group, i.e. setup), and it stops at the decoded picture (no window present).
 - T1.14 (partial): headless and window clients decode and render (offscreen renderer test passes). Measured on loopback, VA-API → VA-API 1080p60 is about 10 ms from capture to decoded picture.
 - T1.13/T1.16 (partial): Opus audio both ways with PLC. Mic WAV → host WAV correlation is 0.997 on loopback. Audio latency estimate is about 18 ms. The private PipeWire sink/source arrives with the virtual display.
 - T1.21: clipboard is a shared `qr-clip` crate (X11 CLIPBOARD via XFixes, INCR both ways) used by host and client, so PNGs stay byte-identical. A24 passes 3/3. Windows/macOS/Wayland clients need their own backend later (T4.5 / Phase 5).

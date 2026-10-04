@@ -119,6 +119,8 @@ pub struct Connected {
     pub files: Arc<qr_net::files::Files>,
     /// Sends a control message from any thread.
     pub ctl: qr_net::files::Control,
+    /// Rumble from the host for the pad thread: (pad, strong, weak, ms).
+    pub rumble: Arc<Mutex<Option<std::sync::mpsc::Sender<(u8, u16, u16, u16)>>>>,
 }
 
 /// Sends input: keys, buttons and text on the reliable input stream;
@@ -450,6 +452,8 @@ pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, 
         None => None,
     };
 
+    let rumble: Arc<Mutex<Option<std::sync::mpsc::Sender<(u8, u16, u16, u16)>>>> = Arc::default();
+    let rumble2 = rumble.clone();
     // Control receive loop.
     {
         let (shared, end_tx, files, ctl) = (shared.clone(), end_tx.clone(), files.clone(), ctl.clone());
@@ -459,6 +463,12 @@ pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, 
                 if let Ok(m) = &m
                     && files.on_control(m, &ctl)
                 {
+                    continue;
+                }
+                if let Ok(Msg::Rumble { idx, strong, weak, ms }) = &m {
+                    if let Some(tx) = rumble2.lock().expect("lock").as_ref() {
+                        let _ = tx.send((*idx, *strong, *weak, *ms));
+                    }
                     continue;
                 }
                 if let Ok(Msg::Clipboard { kind, data }) = &m {
@@ -539,6 +549,7 @@ pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, 
         input,
         files,
         ctl,
+        rumble,
     })
 }
 

@@ -203,8 +203,23 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
         })
     };
 
-    let result = control_loop(&conn, &mut control_rx, &control_tx, &stream, &files, &ctl, clipboard.as_ref()).await;
+    // Rumble from games back to the client's pads.
+    let rumble_task = {
+        let (ctx, ctl) = (ctx.clone(), ctl.clone());
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_millis(20));
+            loop {
+                tick.tick().await;
+                for (idx, strong, weak) in ctx.input.injector.lock().expect("lock").take_rumble() {
+                    ctl(Msg::Rumble { idx, strong, weak, ms: 200 });
+                }
+            }
+        })
+    };
+    let result =
+        control_loop(&ctx, &conn, &mut control_rx, &control_tx, &stream, &files, &ctl, clipboard.as_ref()).await;
     ctl_writer.abort();
+    rumble_task.abort();
     outbox_task.abort();
     stats_task.abort();
     dgram_task.abort();
@@ -214,7 +229,9 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
     result
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn control_loop(
+    ctx: &HostCtx,
     conn: &quinn::Connection,
     rx: &mut qr_net::session::FramedRecv,
     tx: &AsyncMutex<FramedSend>,
@@ -239,6 +256,7 @@ async fn control_loop(
                 send(tx, &Msg::Pong { seq, t_client, t_host: qr_net::clock::now_us() }).await?;
             }
             Msg::Feedback(fb) => stream.feedback(&fb),
+            Msg::PadDetach { idx } => ctx.input.pad_detach(idx),
             Msg::FrameLost { .. } | Msg::KeyframeReq { .. } => {
                 stream.frame_lost(conn.rtt().max(Duration::from_millis(30)));
             }
@@ -313,6 +331,9 @@ impl HostCtx {
         match self.args.source.as_str() {
             "test" => Source::Test { pattern: "ball".into() },
             s if s.starts_with("x11:") => Source::X11 { display: s[4..].into(), rect: None },
+            s if s.starts_with("d3d11") => {
+                Source::D3d11 { monitor: s.split(':').nth(1).and_then(|m| m.parse().ok()).unwrap_or(0) }
+            }
             other => Source::Test { pattern: other.trim_start_matches("test:").into() },
         }
     }

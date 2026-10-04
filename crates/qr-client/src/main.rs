@@ -2,6 +2,7 @@
 
 mod app;
 mod keymap;
+mod pads;
 mod render;
 mod script;
 mod session;
@@ -81,6 +82,9 @@ struct Args {
     /// Don't sync the clipboard.
     #[arg(long)]
     no_clipboard: bool,
+    /// Headless (tests): send a scripted gamepad 0.
+    #[arg(long)]
+    fake_pad: bool,
     /// Turn sharp-text mode on at the start.
     #[arg(long)]
     sharp: bool,
@@ -101,6 +105,14 @@ struct Args {
 
 fn hostname() -> String {
     std::fs::read_to_string("/etc/hostname").map(|s| s.trim().to_string()).unwrap_or_else(|_| "client".into())
+}
+
+/// Starts the gamepad thread for a session.
+pub fn start_pads(c: &session::Connected) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    *c.rumble.lock().expect("lock") = Some(tx);
+    let (conn, ctl) = (c.conn.clone(), c.ctl.clone());
+    std::thread::Builder::new().name("qr-pads".into()).spawn(move || pads::run(conn, ctl, rx)).ok();
 }
 
 fn recv_dir(args: &Args) -> PathBuf {
@@ -320,6 +332,11 @@ async fn cli(args: Args) -> Result<()> {
                 }
             }
         });
+    }
+    start_pads(&c);
+    if args.fake_pad {
+        let (conn, ctl) = (c.conn.clone(), c.ctl.clone());
+        std::thread::spawn(move || pads::fake(conn, ctl));
     }
     if args.sharp {
         (c.ctl)(qr_proto::Msg::SetMode { modes: qr_proto::msg::mode::SHARP_TEXT });

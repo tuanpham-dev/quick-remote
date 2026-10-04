@@ -16,7 +16,8 @@ apt-get install -y \
   evtest xdotool x11-utils mesa-utils glmark2-es2 vulkan-tools tcpdump \
   xdg-desktop-portal xdg-desktop-portal-gnome xdg-desktop-portal-wlr mutter \
   sway swaybg wlr-randr wayland-utils libseat1 dbus-x11 \
-  xfce4-session xfwm4 xfce4-panel xterm
+  xfce4-session xfwm4 xfce4-panel xterm \
+  clang lld llvm openjdk-17-jdk-headless msitools p7zip-full unzip
 apt-get install -y intel-media-va-driver-non-free || echo "warning: intel-media-va-driver-non-free not installed (non-free component missing?)"
 
 cat >/etc/udev/rules.d/70-quickremote.rules <<'EOF'
