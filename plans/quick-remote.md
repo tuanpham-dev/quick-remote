@@ -439,17 +439,17 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
 **Goal:** an Android 10+ app that pairs, streams, and takes touch, keyboard, gamepad and pen input.
 **Checkpoint:** `tests/e2e/run.sh phase5` passes A28 on the emulator (API 34, x86_64). **Hardware gate:** a real device for hardware-decode latency and TV remote.
 
-- [ ] **T5.1 — Android toolchain**
+- [x] **T5.1 — Android toolchain**
   - Files: `scripts/android-sdk.sh`
   - Do: download the commandline-tools to `~/Android/sdk`; install platform 34, build-tools, NDK r27, emulator and a system image; `cargo install cargo-ndk`; add the `aarch64-linux-android` and `x86_64-linux-android` targets.
   - Depends on: —
   - Done when: `sdkmanager --list_installed` shows them, and the emulator boots (KVM needed: T0.2).
-- [ ] **T5.2 — qr-ffi**
+- [x] **T5.2 — qr-ffi**
   - Files: `crates/qr-ffi/src/lib.rs`
   - Do: JNI (`jni` crate) exports: `connect(addrOrId, pin)`, `nextVideoFrame()` (direct ByteBuffer + metadata), `nextAudio()`, `sendInput(bytes)`, `sendPad(state)`, `pollEvents()` (JSON), `close()`. Discovery through mdns-sd, which needs Android's `MulticastLock` from Kotlin.
   - Depends on: T1.15
   - Done when: `cargo ndk -t x86_64 -t arm64-v8a build -p qr-ffi` succeeds.
-- [ ] **T5.3 — Android app**
+- [x] **T5.3 — Android app**
   - Files: `android/settings.gradle.kts`, `android/app/build.gradle.kts`, `android/app/src/main/AndroidManifest.xml`, `android/app/src/main/java/dev/quickremote/{MainActivity.kt,HostListActivity.kt,SessionActivity.kt,VideoDecoder.kt,AudioPlayer.kt,InputHandler.kt,Pads.kt,Overlay.kt,Native.kt}`
   - Do:
     - Host list and pairing UI.
@@ -518,6 +518,9 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
 - T1.25 (partial): the still-screen refresh is done (300 ms after the last change, one keyframe at 8× budget) and A12 passes (SSIM 0.9998). A still page also converges without the mode, so A12 doesn't show the refresh's benefit right after motion stops. 4:4:4 needs a 4:4:4 decoder on the client (`avdec_h264` from gstreamer1.0-libav, in setup) plus a stream restart; it isn't wired yet.
 - Phase 2: A4 passes through cone NATs (Direct) and symmetric NATs (Relayed), and A3a/b pass (30k relayed packets, canary never in plaintext). Deviation from T2.3: no wrapping `AsyncUdpSocket`. Hole punches and relay hellos go out on a clone of the endpoint's UDP socket (same port, so the same NAT mapping). Each relay session has its own port, and the relay learns both peers from their `PUNCH_MAGIC ‖ token` hellos, so relayed packets carry no token prefix. Relay ports bind to `--public-ip`, because on a multi-homed server a 0.0.0.0 socket can answer from another address, which NATs drop. The Docker image (A5) is written but ENV-BLOCKED: no access to the docker group.
 - Phase 3: A27 passes in headless Chrome: video at 60 fps via WebCodecs, audio, keys, pointer lock, 3 MiB upload, clipboard host → page, paired reconnect without PIN. Gamepad and Firefox are ENV-BLOCKED. Deviations: (1) the host runs a **web gateway**. It terminates WebTransport, authenticates the browser, and pipes the browser's streams and datagrams to a loopback QUIC session with its own trusted identity, so session code serves both kinds of client. The gateway records each browser's real address, RTT and datagram size for profile choice and shard sizing. (2) SPAKE2 and FEC run in the browser as WebAssembly (`qr-wasm` over a new `qr-pair` crate) instead of a TypeScript re-implementation, and the TypeScript side mirrors only the message codec (checked against the vectors). Still to do: the 13-day WebTransport certificate isn't rotated yet, so a host has to restart within 13 days. The fix is for the page to fetch the current hash and the host to reload its certificate.
+- Phase 5: the SDK, NDK and a JDK 17 are installed in the home directory (no root needed); `scripts/build-android.sh` builds `qr-ffi` for arm64-v8a and x86_64 and the debug APK (18.6 MB). `qr-ffi` runs its own lean session core (no GStreamer): frames and Opus go to Kotlin MediaCodec, input comes back over JNI. The core is checked natively by `cargo run -p qr-ffi --example probe` against a host (pairing, 150 frames in 5 s, 1,002 audio packets, input, events). A28 on the emulator is ENV-BLOCKED: no KVM access (setup adds the kvm group). Android files from the host are refused for now.
+- Phase 4 so far: `qr-win` (SendInput scancodes, absolute/relative mouse, wheel, Unicode text, synthetic pen, ViGEmBus pads with rumble) compile-checks for x86_64-pc-windows-msvc. The full host can't be cross-checked here: `ring` needs a Windows C toolchain (setup adds clang/lld). T4.3 capture uses the existing `d3d11` source string; T4.5 and T4.6 aren't started.
+- T1.19/T1.20: Linux uinput keyboard, mouse, pen and Xbox-style pads with force feedback are written (`crates/qr-host/src/uinput.rs`), plus client pads through gilrs (`--fake-pad` for tests). Running them waits on uinput access (setup).
 - T1.17/T1.18 (partial): input stream, motion running totals, XTest injector and the `--script` test driver. A19a, A20 and A23 pass (input p95 0.56–0.66 ms). uinput waits on root setup.
 
 ## Open Questions / Risks

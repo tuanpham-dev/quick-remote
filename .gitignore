@@ -2,3 +2,9 @@ target/
 node_modules/
 *.pcap
 /out/
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/app/src/main/jniLibs/
+web/node_modules/
