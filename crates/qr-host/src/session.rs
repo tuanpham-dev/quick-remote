@@ -340,6 +340,9 @@ fn choose_encoder(ctx: &HostCtx, decoders: &[CodecCap]) -> Option<(probe::Encode
 impl HostCtx {
     /// The monitors a client can pick from.
     pub fn monitors(&self) -> Vec<Monitor> {
+        if let Some(m) = &self.mutter {
+            return m.monitors();
+        }
         if let Some(vd) = &self.vd {
             match vd.lock().expect("lock").monitors() {
                 Ok(m) if !m.is_empty() => return m,
@@ -370,6 +373,9 @@ impl HostCtx {
 
     /// Capture source for a monitor of a non-virtual display.
     pub fn source_for(&self, mon: &Monitor) -> Source {
+        if let Some(node) = self.mutter.as_ref().and_then(|m| m.node(mon.id)) {
+            return Source::PipeWire { fd: None, node };
+        }
         match self.source() {
             // One monitor of several: its rectangle of the screen.
             Source::X11 { display, .. } if self.monitors().len() > 1 => Source::X11 {

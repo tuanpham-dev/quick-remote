@@ -3301,6 +3301,7 @@ dependencies = [
  "bytes",
  "clap",
  "evdev",
+ "futures-util",
  "glow",
  "khronos-egl",
  "libc",

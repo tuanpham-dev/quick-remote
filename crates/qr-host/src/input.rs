@@ -452,6 +452,18 @@ pub fn datagram(ctx: &HostCtx, d: &[u8]) {
     }
 }
 
+/// `main` for keys and pointer, plus uinput for pads and pen when allowed.
+#[cfg(target_os = "linux")]
+pub fn with_devices(main: Box<dyn Injector>, name: &'static str) -> Box<dyn Injector> {
+    match crate::uinput::Uinput::open(7680, 4320) {
+        Ok(u) => Box::new(Split { main, devices: Box::new(u), name }),
+        Err(e) => {
+            tracing::warn!("gamepads and pen are off: {e:#}");
+            main
+        }
+    }
+}
+
 /// Builds the injector named by `--input`. `vd_socket`: the virtual
 /// display's Wayland socket, when it is the source.
 pub fn open(spec: &str, source: &str, vd_socket: Option<&std::path::Path>) -> Result<Box<dyn Injector>> {
@@ -463,13 +475,7 @@ pub fn open(spec: &str, source: &str, vd_socket: Option<&std::path::Path>) -> Re
         #[cfg(target_os = "linux")]
         "auto" | "wayland" if vd_socket.is_some() => {
             let wl = crate::wlinput::WlInput::open(vd_socket.expect("checked"))?;
-            match crate::uinput::Uinput::open(7680, 4320) {
-                Ok(u) => Box::new(Split { main: Box::new(wl), devices: Box::new(u), name: "wayland+uinput" }),
-                Err(e) => {
-                    tracing::warn!("gamepads and pen are off: {e:#}");
-                    Box::new(wl)
-                }
-            }
+            with_devices(Box::new(wl), "wayland+uinput")
         }
         "xtest" => Box::new(xtest::XTest::open(if arg.is_empty() { ":0" } else { arg })?),
         #[cfg(target_os = "linux")]

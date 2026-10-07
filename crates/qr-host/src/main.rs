@@ -10,6 +10,7 @@ mod ratectl;
 mod session;
 mod stream;
 mod gpuconv;
+mod mutter;
 mod screencopy;
 mod vdisplay;
 mod wlinput;
@@ -143,6 +144,8 @@ pub struct HostCtx {
     pub web_peers: Arc<web::WebPeers>,
     /// The virtual display, for `--source vdisplay`.
     pub vd: Option<Mutex<vdisplay::VirtualDisplay>>,
+    /// The GNOME desktop's remote-desktop session, for `--source mutter`.
+    pub mutter: Option<mutter::MutterSession>,
 }
 
 impl HostCtx {
@@ -157,6 +160,9 @@ impl HostCtx {
     /// The mode a stream starts at: a virtual display takes the client's
     /// request (up to 4K120); real desktops keep their own size.
     pub fn display_mode(&self, w: u16, h: u16, refresh: u16) -> (u32, u32, u32) {
+        if let Some(m) = self.mutter.as_ref().and_then(|m| m.monitors().into_iter().next()) {
+            return (m.width as u32, m.height as u32, self.args.fps);
+        }
         if self.vd.is_some() {
             let (dw, dh) = self.args.size();
             let (w, h) = if w >= 320 && h >= 200 { (w.min(3840) as u32 & !1, h.min(2160) as u32 & !1) } else { (dw, dh) };
@@ -264,9 +270,21 @@ async fn main() -> Result<()> {
         }
         None => None,
     };
+    let mutter = if args.source == "mutter" {
+        Some(mutter::MutterSession::start().await.context("starting a GNOME remote-desktop session")?)
+    } else {
+        None
+    };
     let vd_socket = vd.as_ref().map(|d| d.lock().expect("lock").wayland_socket());
-    let injector =
-        input::open(&args.input, &args.source, vd_socket.as_deref()).context("opening the input backend")?;
+    let injector = match &mutter {
+        // GNOME: input through the remote-desktop session (pads and pen
+        // through uinput where allowed).
+        Some(m) if args.input == "auto" => {
+            let main: Box<dyn input::Injector> = Box::new(m.injector()?);
+            input::with_devices(main, "mutter+uinput")
+        }
+        _ => input::open(&args.input, &args.source, vd_socket.as_deref()).context("opening the input backend")?,
+    };
     tracing::info!(backend = injector.name(), "input");
     let web_peers: Arc<web::WebPeers> = Arc::default();
     if let Some(wl) = args.web_listen {
@@ -304,7 +322,7 @@ async fn main() -> Result<()> {
             }
         });
     }
-    let ctx = Arc::new(HostCtx { args, encoders, input: input::Input::new(injector), relays, web_peers, vd });
+    let ctx = Arc::new(HostCtx { args, encoders, input: input::Input::new(injector), relays, web_peers, vd, mutter });
     let active: Arc<tokio::sync::Mutex<Option<Active>>> = Arc::default();
     while let Some(incoming) = ep.accept().await {
         let (ctx, id, keystore, pin, limiter, active, name) =
