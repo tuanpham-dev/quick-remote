@@ -25,6 +25,8 @@ mod uinput;
 mod vdisplay;
 mod video;
 mod web;
+#[cfg(windows)]
+mod winservice;
 #[cfg(target_os = "linux")]
 mod wlclip;
 #[cfg(target_os = "linux")]
@@ -109,6 +111,16 @@ pub struct Args {
     /// are passed on to it.
     #[arg(long)]
     supervise: bool,
+    /// Windows: run as the service (the service manager passes this).
+    #[arg(long)]
+    service: bool,
+    /// Windows: register the service (starts with Windows, runs the host in
+    /// the active session as SYSTEM); the other options are passed on.
+    #[arg(long)]
+    install_service: bool,
+    /// Windows: remove the service.
+    #[arg(long)]
+    uninstall_service: bool,
     /// Audio to send: `auto` (what the desktop plays), `none`,
     /// `test:<wave>`, `pipewire:<target>`, `pulse[:<device>]`, `default`
     /// (the default input).
@@ -248,14 +260,14 @@ async fn main() -> Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
     let mut args = Args::parse();
-    #[cfg(target_os = "linux")]
-    if args.supervise {
-        // Everything but --supervise and --source (set per session).
+    // Service modes pass everything else on to the host they run, except
+    // --source (they choose it).
+    let forward = || {
         let mut forward = Vec::new();
         let mut it = std::env::args().skip(1);
         while let Some(a) = it.next() {
             match a.as_str() {
-                "--supervise" => {}
+                "--supervise" | "--service" | "--install-service" | "--uninstall-service" => {}
                 "--source" => {
                     it.next();
                 }
@@ -263,7 +275,28 @@ async fn main() -> Result<()> {
                 _ => forward.push(a),
             }
         }
-        return supervisor::run(forward).await;
+        forward
+    };
+    #[cfg(target_os = "linux")]
+    if args.supervise {
+        return supervisor::run(forward()).await;
+    }
+    #[cfg(windows)]
+    {
+        if args.install_service {
+            return winservice::install(&forward());
+        }
+        if args.uninstall_service {
+            return winservice::uninstall();
+        }
+        if args.service {
+            let f = forward();
+            return tokio::task::spawn_blocking(move || winservice::run(f)).await?;
+        }
+    }
+    #[cfg(not(windows))]
+    if args.service || args.install_service || args.uninstall_service {
+        anyhow::bail!("--service, --install-service and --uninstall-service are for Windows; on Linux use --supervise");
     }
     args.source = resolve_source(&args.source);
     qr_net::init_crypto();
