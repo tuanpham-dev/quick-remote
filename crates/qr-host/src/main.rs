@@ -87,8 +87,9 @@ pub struct Args {
     /// Print the working encoders and exit.
     #[arg(long)]
     probe: bool,
-    /// Audio to send: `auto`, `none`, `test:<wave>`, `pipewire:<target>`,
-    /// `pulse[:<device>]`, `default`.
+    /// Audio to send: `auto` (what the desktop plays), `none`,
+    /// `test:<wave>`, `pipewire:<target>`, `pulse[:<device>]`, `default`
+    /// (the default input).
     #[arg(long, default_value = "auto")]
     audio: String,
     /// Where the client's microphone goes: `auto` (the virtual display's

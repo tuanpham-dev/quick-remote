@@ -47,7 +47,9 @@ fn source_desc(s: &AudioSource) -> String {
         AudioSource::PipeWire { target, sink, fd } => {
             let fd = fd.map(|f| format!(" fd={f}")).unwrap_or_default();
             let props = if *sink { " stream-properties=\"props,stream.capture.sink=true\"" } else { "" };
-            format!("pipewiresrc{fd} target-object={target}{props} do-timestamp=true")
+            // No target: the default (sink, with `sink`).
+            let target = if target.is_empty() { String::new() } else { format!(" target-object={target}") };
+            format!("pipewiresrc{fd}{target}{props} do-timestamp=true")
         }
         AudioSource::Pulse { device } => {
             let d = device.as_ref().map(|d| format!(" device={d}")).unwrap_or_default();

@@ -27,7 +27,10 @@ fn audio_source(ctx: &HostCtx) -> Option<AudioSource> {
             };
             AudioSource::PipeWire { target: "qr-out".into(), sink: true, fd: Some(fd) }
         }
-        ("auto", _) | ("default", _) => AudioSource::Default,
+        // A desktop: what it plays, the default sink's monitor (through
+        // PulseAudio or pipewire-pulse, which every desktop runs).
+        ("auto", _) => AudioSource::Pulse { device: Some("@DEFAULT_MONITOR@".into()) },
+        ("default", _) => AudioSource::Default,
         ("test", w) => AudioSource::Test { wave: if w.is_empty() { "sine".into() } else { w.into() } },
         ("pipewire", t) => AudioSource::PipeWire { target: t.into(), sink: false, fd: None },
         ("pulse", d) => AudioSource::Pulse { device: (!d.is_empty()).then(|| d.into()) },
