@@ -13,11 +13,11 @@ apt-get update
 apt-get install -y \
   libpipewire-0.3-dev libopus-dev libxkbcommon-dev libva-dev libasound2-dev \
   gstreamer1.0-libav gstreamer1.0-pipewire gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
-  evtest xdotool x11-utils mesa-utils glmark2-es2 vulkan-tools tcpdump \
+  evtest xdotool x11-utils mesa-utils glmark2-es2-x11 vulkan-tools tcpdump \
   xdg-desktop-portal xdg-desktop-portal-gnome xdg-desktop-portal-wlr mutter \
   sway swaybg wlr-randr wayland-utils libseat1 dbus-x11 \
   xfce4-session xfwm4 xfce4-panel xterm \
-  clang lld llvm openjdk-17-jdk-headless msitools p7zip-full unzip
+  clang lld llvm msitools p7zip-full unzip
 apt-get install -y intel-media-va-driver-non-free || echo "warning: intel-media-va-driver-non-free not installed (non-free component missing?)"
 
 cat >/etc/udev/rules.d/70-quickremote.rules <<'EOF'
