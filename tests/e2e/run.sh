@@ -17,6 +17,7 @@ phase1)
 	run lan a15_x11
 	run lan a15_wayland
 	run lan a15_wlroots
+	run lan web_rotate
 	[[ -f "$here/a10_a11.sh" ]] && run wan a10_a11
 	# Virtual display (ENV-BLOCKED without the render group).
 	run lan a16

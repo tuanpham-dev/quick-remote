@@ -322,13 +322,16 @@ async fn main() -> Result<()> {
                 .filter_map(|a| a.parse::<SocketAddr>().ok())
                 .map(|a| a.ip().to_string()),
         );
-        let cert = web::make_cert(names)?;
+        let cert = web::wt_cert(names.clone())?;
+        let page_cert = web::page_cert(&dir, names.clone())?;
         let hash = base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, cert.hash);
         let host_addr =
             SocketAddr::new(if addr.ip().is_unspecified() { "127.0.0.1".parse()? } else { addr.ip() }, addr.port());
         let gw = Arc::new(web::Gateway {
             id: web::gateway_identity(&dir, &keystore)?,
-            cert,
+            cert: std::sync::RwLock::new(cert),
+            names,
+            page_cert,
             host_addr,
             web_keys: Mutex::new(KeyStore::open(&dir.join("web-paired.json"))?),
             pin: pin.clone(),

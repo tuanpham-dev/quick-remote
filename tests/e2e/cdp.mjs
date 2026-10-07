@@ -11,7 +11,8 @@ export async function launch({ chrome = process.env.CHROME || "/usr/bin/google-c
   const proc = spawn(chrome, [
     "--headless=new", `--remote-debugging-port=${port}`, `--user-data-dir=${dir}`, "--no-first-run",
     "--no-default-browser-check", "--autoplay-policy=no-user-gesture-required", "--use-angle=swiftshader",
-    "--enable-unsafe-swiftshader", "--window-size=1280,800", ...args, "about:blank",
+    "--enable-unsafe-swiftshader", "--window-size=1280,800", ...args,
+    ...(process.env.CHROME_ARGS ? process.env.CHROME_ARGS.split(" ") : []), "about:blank",
   ], { stdio: ["ignore", "ignore", "pipe"] });
   let ws;
   for (let i = 0; i < 100; i++) {

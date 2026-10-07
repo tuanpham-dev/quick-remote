@@ -28,24 +28,61 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[folder = "../../web/dist"]
 struct Assets;
 
-/// The WebTransport certificate: ECDSA P-256, valid 13 days (browsers
-/// accept a pinned self-signed certificate only for at most 14).
+/// A self-signed ECDSA P-256 certificate.
+#[derive(Clone)]
 pub struct WebCert {
     pub der: Vec<u8>,
     pub key: Vec<u8>,
     pub hash: [u8; 32],
+    made: Instant,
 }
 
-pub fn make_cert(names: Vec<String>) -> Result<WebCert> {
+/// WebTransport certificates live 13 days (browsers accept a pinned
+/// self-signed certificate for at most 14) and are replaced after 12.
+const WT_DAYS: i64 = 13;
+const ROTATE: Duration = Duration::from_secs(12 * 24 * 3600);
+
+pub fn make_cert(names: Vec<String>, days: i64) -> Result<WebCert> {
     let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256)?;
     let mut p = rcgen::CertificateParams::new(names)?;
     let now = time::OffsetDateTime::now_utc();
     p.not_before = now - time::Duration::hours(1);
-    p.not_after = now + time::Duration::days(13);
+    p.not_after = now + time::Duration::days(days);
     let cert = p.self_signed(&key)?;
     let der = cert.der().to_vec();
     let hash = Sha256::digest(&der).into();
-    Ok(WebCert { der, key: key.serialize_der(), hash })
+    Ok(WebCert { der, key: key.serialize_der(), hash, made: Instant::now() })
+}
+
+/// The WebTransport certificate for now.
+pub fn wt_cert(names: Vec<String>) -> Result<WebCert> {
+    make_cert(names, WT_DAYS)
+}
+
+/// The page's HTTPS certificate: long-lived and kept in `dir`, so a
+/// browser's one-time exception for it lasts (unlike the WebTransport
+/// certificate, which is pinned by hash and rotates).
+pub fn page_cert(dir: &Path, names: Vec<String>) -> Result<WebCert> {
+    let (cp, kp) = (dir.join("web-page-cert.der"), dir.join("web-page-key.der"));
+    if let (Ok(der), Ok(key)) = (std::fs::read(&cp), std::fs::read(&kp)) {
+        let hash = Sha256::digest(&der).into();
+        return Ok(WebCert { der, key, hash, made: Instant::now() });
+    }
+    let c = make_cert(names, 3650)?;
+    std::fs::write(&cp, &c.der)?;
+    std::fs::write(&kp, &c.key)?;
+    #[cfg(unix)]
+    std::os::unix::fs::PermissionsExt::set_mode(&mut std::fs::metadata(&kp)?.permissions(), 0o600);
+    #[cfg(unix)]
+    std::fs::set_permissions(&kp, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
+    Ok(c)
+}
+
+fn wt_identity(c: &WebCert) -> Result<wtransport::Identity> {
+    Ok(wtransport::Identity::new(
+        wtransport::tls::CertificateChain::new(vec![wtransport::tls::Certificate::from_der(c.der.clone())?]),
+        wtransport::tls::PrivateKey::from_der_pkcs8(c.key.clone()),
+    ))
 }
 
 /// A browser session as the host should see it.
@@ -63,7 +100,12 @@ pub struct WebPeer {
 pub struct WebPeers(pub Mutex<HashMap<u16, WebPeer>>);
 
 pub struct Gateway {
-    pub cert: WebCert,
+    /// The current WebTransport certificate (rotated).
+    pub cert: std::sync::RwLock<WebCert>,
+    /// Names for new WebTransport certificates.
+    pub names: Vec<String>,
+    /// The page's HTTPS certificate.
+    pub page_cert: WebCert,
     pub host_addr: SocketAddr,
     pub id: qr_net::Identity,
     pub web_keys: Mutex<KeyStore>,
@@ -75,7 +117,7 @@ pub struct Gateway {
 
 pub async fn run(gw: Arc<Gateway>, listen: SocketAddr) -> Result<()> {
     // The page: plain HTTP on loopback (a secure context already), HTTPS
-    // with the same certificate elsewhere.
+    // with the page certificate elsewhere.
     let tcp = tokio::net::TcpListener::bind(listen).await.with_context(|| format!("binding TCP {listen}"))?;
     let tls = if listen.ip().is_loopback() {
         None
@@ -84,22 +126,23 @@ pub async fn run(gw: Arc<Gateway>, listen: SocketAddr) -> Result<()> {
             .with_safe_default_protocol_versions()?
             .with_no_client_auth()
             .with_single_cert(
-                vec![gw.cert.der.clone().into()],
-                rustls::pki_types::PrivateKeyDer::Pkcs8(gw.cert.key.clone().into()),
+                vec![gw.page_cert.der.clone().into()],
+                rustls::pki_types::PrivateKeyDer::Pkcs8(gw.page_cert.key.clone().into()),
             )?;
         Some(tokio_rustls::TlsAcceptor::from(Arc::new(cfg)))
     };
+    let gw2 = gw.clone();
     tokio::spawn(async move {
         loop {
             let Ok((s, _)) = tcp.accept().await else { continue };
-            let tls = tls.clone();
+            let (tls, gw) = (tls.clone(), gw2.clone());
             tokio::spawn(async move {
                 let r = match tls {
                     Some(t) => match t.accept(s).await {
-                        Ok(s) => serve_http(s).await,
+                        Ok(s) => serve_http(s, &gw).await,
                         Err(e) => Err(e.into()),
                     },
-                    None => serve_http(s).await,
+                    None => serve_http(s, &gw).await,
                 };
                 if let Err(e) = r {
                     tracing::debug!("http: {e:#}");
@@ -108,16 +151,44 @@ pub async fn run(gw: Arc<Gateway>, listen: SocketAddr) -> Result<()> {
         }
     });
 
-    let identity = wtransport::Identity::new(
-        wtransport::tls::CertificateChain::new(vec![wtransport::tls::Certificate::from_der(gw.cert.der.clone())?]),
-        wtransport::tls::PrivateKey::from_der_pkcs8(gw.cert.key.clone()),
-    );
-    let cfg = wtransport::ServerConfig::builder()
-        .with_bind_address(listen)
-        .with_identity(identity)
-        .keep_alive_interval(Some(Duration::from_secs(1)))
-        .build();
-    let ep = wtransport::Endpoint::server(cfg)?;
+    let config = move |c: &WebCert| -> Result<wtransport::ServerConfig> {
+        Ok(wtransport::ServerConfig::builder()
+            .with_bind_address(listen)
+            .with_identity(wt_identity(c)?)
+            .keep_alive_interval(Some(Duration::from_secs(1)))
+            .build())
+    };
+    let current = gw.cert.read().expect("lock").clone();
+    let ep = Arc::new(wtransport::Endpoint::server(config(&current)?)?);
+    // Rotation: a new certificate before the old one expires. Sessions on
+    // the old one carry on; new ones get the new one, and pages ask for its
+    // hash (`/wt-hash`).
+    {
+        let (gw, ep) = (gw.clone(), ep.clone());
+        let every = std::env::var("QR_WEB_ROTATE_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .map_or(ROTATE, Duration::from_secs);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(every.min(Duration::from_secs(3600))).await;
+                if gw.cert.read().expect("lock").made.elapsed() < every {
+                    continue;
+                }
+                let r = wt_cert(gw.names.clone()).and_then(|c| {
+                    ep.reload_config(config(&c)?, false)?;
+                    Ok(c)
+                });
+                match r {
+                    Ok(c) => {
+                        tracing::info!(hash = %B64.encode(c.hash), "new WebTransport certificate");
+                        *gw.cert.write().expect("lock") = c;
+                    }
+                    Err(e) => tracing::warn!("rotating the WebTransport certificate: {e:#}"),
+                }
+            }
+        });
+    }
     loop {
         let incoming = ep.accept().await;
         let gw = gw.clone();
@@ -135,13 +206,26 @@ pub async fn run(gw: Arc<Gateway>, listen: SocketAddr) -> Result<()> {
     }
 }
 
-async fn serve_http<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(mut s: S) -> Result<()> {
+async fn serve_http<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(mut s: S, gw: &Gateway) -> Result<()> {
     let mut buf = vec![0u8; 8192];
     let n = s.read(&mut buf).await?;
     let req = String::from_utf8_lossy(&buf[..n]);
     let path = req.split_whitespace().nth(1).unwrap_or("/");
     let path = path.split('?').next().unwrap_or("/").trim_start_matches('/');
     let path = if path.is_empty() { "index.html" } else { path };
+    // The current WebTransport certificate hash (it rotates).
+    if path == "wt-hash" {
+        let hash = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(gw.cert.read().expect("lock").hash);
+        let body = serde_json::to_vec(&json!({ "hash": hash }))?;
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        s.write_all(head.as_bytes()).await?;
+        s.write_all(&body).await?;
+        s.shutdown().await?;
+        return Ok(());
+    }
     let (status, ctype, body) = match Assets::get(path) {
         Some(f) => {
             let ctype = match Path::new(path).extension().and_then(|e| e.to_str()) {
@@ -200,7 +284,10 @@ async fn authenticate(gw: &Gateway, conn: &wtransport::Connection) -> Result<Str
     let (mut tx, mut rx) = conn.accept_bi().await?;
     let mut nonce = [0u8; 32];
     rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut nonce);
-    send_json(&mut tx, &json!({"t": "hello", "nonce": B64.encode(nonce), "hostFp": B64.encode(gw.cert.hash)})).await?;
+    // The certificate this session is on (as of now: one rotated in later
+    // doesn't apply). The page checks it against the hash it pinned.
+    let host_fp = gw.cert.read().expect("lock").hash;
+    send_json(&mut tx, &json!({"t": "hello", "nonce": B64.encode(nonce), "hostFp": B64.encode(host_fp)})).await?;
     let m = recv_json(&mut rx).await?;
     let spki = b64(&m, "spki")?;
     let point = spki_point(&spki)?.to_vec();
@@ -210,7 +297,7 @@ async fn authenticate(gw: &Gateway, conn: &wtransport::Connection) -> Result<Str
         Some("key") => {
             let sig = b64(&m, "sig")?;
             let mut msg = nonce.to_vec();
-            msg.extend_from_slice(&gw.cert.hash);
+            msg.extend_from_slice(&host_fp);
             let ok = ring::signature::UnparsedPublicKey::new(&ring::signature::ECDSA_P256_SHA256_FIXED, &point)
                 .verify(&msg, &sig)
                 .is_ok();
@@ -229,7 +316,7 @@ async fn authenticate(gw: &Gateway, conn: &wtransport::Connection) -> Result<Str
             let pin = gw.pin.lock().expect("lock").clone();
             let (state, msg_b) = Pairing::host(&pin);
             send_json(&mut tx, &json!({"t": "pair", "msg": B64.encode(&msg_b)})).await?;
-            let t = Transcript { client_fp: fp, host_fp: gw.cert.hash, exporter: [0; 32] };
+            let t = Transcript { client_fp: fp, host_fp, exporter: [0; 32] };
             let keys = state.finish(&b64(&m, "msg")?, &t);
             let c = recv_json(&mut rx).await?;
             let mac: [u8; 32] = b64(&c, "mac")?.try_into().map_err(|_| anyhow!("bad mac"))?;

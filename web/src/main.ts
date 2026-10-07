@@ -1,6 +1,6 @@
 // QuickRemote web client.
 
-import { authenticate, PinNeeded, wasm } from "./auth.ts";
+import { authenticate, CertChanged, PinNeeded, wasm } from "./auth.ts";
 import { EVDEV } from "./keymap.ts";
 import {
   ClipKind, Codec, Kind, Mode, PROTO_MAJOR, PROTO_MINOR, decodeAudio, decodeMsg, encodeInput, encodeMotion, encodeMsg,
@@ -532,15 +532,26 @@ fileInput.addEventListener("change", () => {
 });
 
 // Connection.
-function certHash(): Uint8Array | null {
-  const m = location.hash.match(/c=([A-Za-z0-9_-]+)/);
-  if (!m) return null;
-  const s = m[1].replace(/-/g, "+").replace(/_/g, "/");
+function unb64url(v: string): Uint8Array {
+  const s = v.replace(/-/g, "+").replace(/_/g, "/");
   return Uint8Array.from(atob(s + "=".repeat((4 - (s.length % 4)) % 4)), (c) => c.charCodeAt(0));
 }
 
-async function connect(pin: string | null): Promise<void> {
-  const hash = certHash();
+/** The host's current WebTransport certificate hash: it rotates, so ask
+ *  the host (same origin); the link's `#c=` is the fallback. */
+async function certHash(): Promise<Uint8Array | null> {
+  try {
+    const r = await fetch("/wt-hash", { cache: "no-store" });
+    if (r.ok) return unb64url((await r.json()).hash);
+  } catch {
+    // An older host, or the page opened from elsewhere.
+  }
+  const m = location.hash.match(/c=([A-Za-z0-9_-]+)/);
+  return m ? unb64url(m[1]) : null;
+}
+
+async function connect(pin: string | null, retried = false): Promise<void> {
+  const hash = await certHash();
   if (!hash) { say("This link is missing the host's certificate hash (#c=…). Use the link the host printed."); return; }
   if (typeof WebTransport === "undefined") { say("This browser has no WebTransport. Use a current Chrome, Edge or Firefox."); return; }
   say("Connecting…");
@@ -548,9 +559,10 @@ async function connect(pin: string | null): Promise<void> {
   const wt = new WebTransport(url, { serverCertificateHashes: [{ algorithm: "sha-256", value: hash }], congestionControl: "low-latency" } as WebTransportOptions);
   await wt.ready;
   try {
-    await authenticate(wt, pin);
+    await authenticate(wt, pin, hash);
   } catch (e) {
     wt.close();
+    if (e instanceof CertChanged && !retried) return connect(pin, true);
     if (e instanceof PinNeeded) { pinBox.hidden = false; say(e.message); pinInput.focus(); return; }
     throw e;
   }

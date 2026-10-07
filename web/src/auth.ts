@@ -64,7 +64,14 @@ export class PinNeeded extends Error {}
  * Authenticates on the connection's first bidirectional stream. With a
  * `pin`, pairs; otherwise proves an earlier pairing.
  */
-export async function authenticate(wt: WebTransport, pin: string | null): Promise<void> {
+/** The host now presents another certificate than the one pinned (it
+ *  rotated): fetch the current hash and connect again. */
+export class CertChanged extends Error {}
+
+/** `pinned`: the certificate hash this connection was made with. The
+ *  authentication is bound to it, so a relay with another certificate
+ *  can't pass the host's answers through. */
+export async function authenticate(wt: WebTransport, pin: string | null, pinned: Uint8Array): Promise<void> {
   await wasm();
   const key = await browserKey();
   const spki = new Uint8Array(await crypto.subtle.exportKey("spki", key.publicKey));
@@ -84,6 +91,9 @@ export async function authenticate(wt: WebTransport, pin: string | null): Promis
   const hello = await read();
   const nonce = unb64(hello.nonce);
   const hostFp = unb64(hello.hostFp);
+  if (hostFp.length !== pinned.length || hostFp.some((b, i) => b !== pinned[i])) {
+    throw new CertChanged("the host's certificate changed");
+  }
   if (pin) {
     const p = new WebPairing(pin);
     await w.send(enc({ t: "pair", spki: b64(spki), msg: b64(p.message()), name: navigator.userAgent.slice(0, 60) }));
