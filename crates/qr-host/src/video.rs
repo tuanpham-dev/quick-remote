@@ -115,7 +115,10 @@ impl Video {
                 .await?
                 .context("capturing the virtual display")?;
             (w, h) = (o.width, o.height);
-            let s = Source::App { format: o.format.into() };
+            let s = match o.format {
+                crate::screencopy::Format::Raw(f) => Source::App { format: f.into() },
+                crate::screencopy::Format::DmaNv12(modifier) => Source::DmaNv12 { modifier },
+            };
             opened = Some(o);
             s
         } else {
@@ -143,7 +146,11 @@ impl Video {
         let capture = opened.map(|o| {
             let enc = stream.encoder.clone();
             o.run(Duration::from_millis(500), move |frame| {
-                if let Err(e) = enc.push(frame) {
+                let r = match frame {
+                    crate::screencopy::Frame::Packed(p) => enc.push(p),
+                    crate::screencopy::Frame::Dma(d) => enc.push_dma(d),
+                };
+                if let Err(e) = r {
                     tracing::debug!("frame not taken: {e:#}");
                 }
             })

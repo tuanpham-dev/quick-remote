@@ -9,6 +9,7 @@ mod portal;
 mod ratectl;
 mod session;
 mod stream;
+mod gpuconv;
 mod screencopy;
 mod vdisplay;
 mod wlinput;

@@ -11,6 +11,8 @@ tracing.workspace = true
 gstreamer.workspace = true
 gstreamer-app.workspace = true
 gstreamer-video.workspace = true
+gstreamer-allocators.workspace = true
+libloading = "0.8"
 libc.workspace = true
 
 [dev-dependencies]

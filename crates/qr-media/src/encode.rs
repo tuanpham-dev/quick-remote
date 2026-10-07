@@ -29,6 +29,9 @@ pub enum Source {
     /// Frames pushed by the caller through [`Encoder::push`] (screencopy).
     /// `format`: a GStreamer raw format such as `BGRx`.
     App { format: String },
+    /// NV12 frames in DMA-BUFs with this DRM modifier, pushed through
+    /// [`Encoder::push_dma`] (GPU-converted capture; VA encoders only).
+    DmaNv12 { modifier: u64 },
     /// An X11 display (`ximagesrc`), optionally one monitor's rectangle.
     X11 { display: String, rect: Option<(i32, i32, u32, u32)> },
     /// Windows desktop capture (`d3d11screencapturesrc`).
@@ -121,6 +124,10 @@ pub fn source_desc(s: &Source, w: u32, h: u32, fps: u32) -> String {
         Source::App { format } => format!(
             "appsrc name=src is-live=true do-timestamp=true format=time max-buffers=2 leaky-type=downstream \
              caps=\"video/x-raw,format={format},width={w},height={h},framerate=0/1\""
+        ),
+        Source::DmaNv12 { modifier } => format!(
+            "appsrc name=src is-live=true do-timestamp=true format=time max-buffers=2 leaky-type=downstream \
+             caps=\"video/x-raw(memory:DMABuf),format=DMA_DRM,drm-format=NV12:0x{modifier:016x},width={w},height={h},framerate=0/1\""
         ),
         Source::X11 { display, rect } => {
             let r = rect
@@ -266,6 +273,8 @@ impl Encoder {
         // VA and D3D11 encoders take GPU memory directly; everything else
         // gets system memory through videoconvert.
         let convert = match (e.family, &cfg.source) {
+            // Already NV12 in GPU memory.
+            (_, Source::DmaNv12 { .. }) => "identity".to_string(),
             (Family::Va, Source::PipeWire { .. } | Source::App { .. }) => {
                 if gst::ElementFactory::find("vapostproc").is_some() {
                     format!("vapostproc ! video/x-raw(memory:VAMemory),format={fmt}")
@@ -405,6 +414,29 @@ impl Encoder {
         })
     }
 
+    /// Feeds one GPU frame to a [`Source::DmaNv12`] pipeline. The frame's
+    /// buffer is busy until the encoder lets go of it ([`DmaFrame::busy`]).
+    pub fn push_dma(&self, frame: &DmaFrame) -> Result<()> {
+        let src = self.appsrc.as_ref().context("this encoder has its own source")?;
+        let mut buf = gst::Buffer::new();
+        {
+            let b = buf.get_mut().expect("new buffer");
+            b.append_memory(frame.memory.clone());
+            gstreamer_video::VideoMeta::add_full(
+                b,
+                gstreamer_video::VideoFrameFlags::empty(),
+                gstreamer_video::VideoFormat::Nv12,
+                frame.width,
+                frame.height,
+                &frame.offsets,
+                &frame.strides,
+            )
+            .map_err(|e| anyhow!("video meta: {e}"))?;
+        }
+        src.push_buffer(buf).map_err(|e| anyhow!("pushing a frame: {e:?}"))?;
+        Ok(())
+    }
+
     /// Feeds one tightly packed frame to a [`Source::App`] pipeline.
     pub fn push(&self, frame: Vec<u8>) -> Result<()> {
         let src = self.appsrc.as_ref().context("this encoder has its own source")?;
@@ -480,5 +512,70 @@ impl Encoder {
 impl Drop for Encoder {
     fn drop(&mut self) {
         let _ = self.pipeline.set_state(gst::State::Null);
+    }
+}
+
+/// GStreamer VA's own DMA-BUF allocator (libgstva, loaded at run time).
+/// Memories must come from it: the VA encoder frees a picture only when it
+/// can find a VA display on the input memory, and with a plain DMA-BUF
+/// allocator every picture (and its reconstruction surface) leaked, so
+/// encoding stopped after four frames (GStreamer 1.26).
+fn va_dmabuf_allocator() -> Option<gstreamer_allocators::DmaBufAllocator> {
+    use gst::glib::translate::from_glib_none;
+    use std::sync::OnceLock;
+    static ALLOC: OnceLock<Option<usize>> = OnceLock::new();
+    let a = *ALLOC.get_or_init(|| {
+        // SAFETY: libgstva's documented signatures; the library and the
+        // allocator stay alive for the process.
+        unsafe {
+            let lib = libloading::Library::new("libgstva-1.0.so.0").ok()?;
+            let new_display: libloading::Symbol<unsafe extern "C" fn(*const std::ffi::c_char) -> *mut std::ffi::c_void> =
+                lib.get(b"gst_va_display_drm_new_from_path\0").ok()?;
+            let new_alloc: libloading::Symbol<unsafe extern "C" fn(*mut std::ffi::c_void) -> *mut gst::ffi::GstAllocator> =
+                lib.get(b"gst_va_dmabuf_allocator_new\0").ok()?;
+            let node = std::env::var("QR_RENDER_NODE").unwrap_or_else(|_| "/dev/dri/renderD128".into());
+            let node = std::ffi::CString::new(node).ok()?;
+            let display = new_display(node.as_ptr());
+            if display.is_null() {
+                return None;
+            }
+            let a = new_alloc(display);
+            std::mem::forget(lib);
+            (!a.is_null()).then_some(a as usize)
+        }
+    });
+    if a.is_none() {
+        tracing::warn!("libgstva's DMA-BUF allocator is unavailable: the VA encoder may leak imported frames");
+    }
+    // SAFETY: a live GstVaDmabufAllocator, a GstDmaBufAllocator subclass.
+    a.map(|p| unsafe { from_glib_none(p as *mut gstreamer_allocators::ffi::GstDmaBufAllocator) })
+}
+
+/// An NV12 picture in a DMA-BUF (both planes in one buffer), wrapped once so
+/// the encoder's import of it is cached across frames.
+pub struct DmaFrame {
+    memory: gst::Memory,
+    pub width: u32,
+    pub height: u32,
+    offsets: [usize; 2],
+    strides: [i32; 2],
+}
+
+impl DmaFrame {
+    /// Takes ownership of `fd` (`size` bytes; planes at `offsets` with
+    /// `strides`).
+    pub fn new(fd: std::os::fd::OwnedFd, size: usize, width: u32, height: u32, offsets: [usize; 2], strides: [i32; 2]) -> Result<Self> {
+        use gstreamer_allocators::prelude::*;
+        init()?;
+        let alloc = va_dmabuf_allocator().unwrap_or_else(gstreamer_allocators::DmaBufAllocator::new);
+        // SAFETY: the allocator takes over the fd.
+        let memory = unsafe { alloc.alloc_dmabuf(fd, size) }.map_err(|e| anyhow!("wrapping a DMA-BUF: {e}"))?;
+        Ok(Self { memory, width, height, offsets, strides })
+    }
+
+    /// The encoder still holds a frame made from this buffer.
+    pub fn busy(&self) -> bool {
+        // SAFETY: reading the refcount of a memory we hold.
+        unsafe { (*self.memory.as_ptr()).mini_object.refcount > 1 }
     }
 }

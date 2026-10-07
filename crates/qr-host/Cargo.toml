@@ -40,6 +40,8 @@ wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 wayland-protocols-misc = { version = "0.3", features = ["client"] }
 xkbcommon-dl = "0.4"
 wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
+khronos-egl = { version = "6", features = ["dynamic"] }
+glow = "0.17"
 
 [target.'cfg(windows)'.dependencies]
 qr-win = { path = "../qr-win" }

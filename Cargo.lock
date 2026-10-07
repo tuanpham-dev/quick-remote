@@ -1595,6 +1595,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "gstreamer-allocators"
+version = "0.25.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "58945dc4d271f16e99fdea35cdbb1161c6cbfa0db9b8511d4e4ccf34bd4e8ef9"
+dependencies = [
+ "glib",
+ "gstreamer",
+ "gstreamer-allocators-sys",
+ "libc",
+]
+
+[[package]]
+name = "gstreamer-allocators-sys"
+version = "0.25.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c56f6a624f91b9cffbfcab33ce87743836ab36a1d14c1bb743c4fc3849bbe7c"
+dependencies = [
+ "glib-sys",
+ "gobject-sys",
+ "gstreamer-sys",
+ "libc",
+ "system-deps",
+]
+
+[[package]]
 name = "gstreamer-app"
 version = "0.25.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3276,6 +3301,8 @@ dependencies = [
  "bytes",
  "clap",
  "evdev",
+ "glow",
+ "khronos-egl",
  "libc",
  "qr-clip",
  "qr-fec",
@@ -3318,9 +3345,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "gstreamer",
+ "gstreamer-allocators",
  "gstreamer-app",
  "gstreamer-video",
  "libc",
+ "libloading",
  "qr-proto",
  "tracing",
  "tracing-subscriber",

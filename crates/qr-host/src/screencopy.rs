@@ -3,6 +3,11 @@
 //! output changes (`copy_with_damage`); a still screen repeats the last
 //! frame every `keepalive` so the encoder can sharpen it.
 //!
+//! When the compositor offers DMA-BUF frames, it copies on the GPU into
+//! our buffer and `gpuconv` makes NV12 for the encoder there (zero copy);
+//! otherwise frames come through shared memory. `QR_VD_CAPTURE=shm` forces
+//! the latter.
+//!
 //! (pipewiresrc 1.4 could not take xdg-desktop-portal-wlr's format
 //! renegotiation, and stalled at random on stream start.)
 
@@ -16,6 +21,9 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use wayland_client::protocol::{wl_buffer, wl_output, wl_registry, wl_shm, wl_shm_pool};
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum, delegate_noop};
+use qr_media::encode::DmaFrame;
+use wayland_protocols::wp::linux_dmabuf::zv1::client::zwp_linux_buffer_params_v1::{self, ZwpLinuxBufferParamsV1};
+use wayland_protocols::wp::linux_dmabuf::zv1::client::zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1;
 use wayland_protocols_wlr::screencopy::v1::client::zwlr_screencopy_frame_v1::{self as frame, ZwlrScreencopyFrameV1};
 use wayland_protocols_wlr::screencopy::v1::client::zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1;
 
@@ -23,9 +31,12 @@ use wayland_protocols_wlr::screencopy::v1::client::zwlr_screencopy_manager_v1::Z
 struct State {
     shm: Option<wl_shm::WlShm>,
     manager: Option<ZwlrScreencopyManagerV1>,
+    dmabuf: Option<ZwpLinuxDmabufV1>,
     outputs: Vec<(wl_output::WlOutput, String)>,
     // The frame in progress.
     shm_buffer: Option<(wl_shm::Format, u32, u32, u32)>,
+    /// DMA-BUF offer: DRM fourcc, width, height.
+    dma_buffer: Option<(u32, u32, u32)>,
     buffer_done: bool,
     y_invert: bool,
     ready: bool,
@@ -35,6 +46,7 @@ struct State {
 impl State {
     fn reset_frame(&mut self) {
         self.shm_buffer = None;
+        self.dma_buffer = None;
         self.buffer_done = false;
         self.y_invert = false;
         self.ready = false;
@@ -55,6 +67,7 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
             match interface.as_str() {
                 "wl_shm" => st.shm = Some(reg.bind(name, 1, qh, ())),
                 "zwlr_screencopy_manager_v1" => st.manager = Some(reg.bind(name, version.min(3), qh, ())),
+                "zwp_linux_dmabuf_v1" if version >= 2 => st.dmabuf = Some(reg.bind(name, version.min(3), qh, ())),
                 // Version 4 announces the output's name.
                 "wl_output" if version >= 4 => {
                     let i = st.outputs.len();
@@ -84,6 +97,7 @@ impl Dispatch<ZwlrScreencopyFrameV1, ()> for State {
                     st.buffer_done = true;
                 }
             }
+            frame::Event::LinuxDmabuf { format, width, height } => st.dma_buffer = Some((format, width, height)),
             frame::Event::BufferDone => st.buffer_done = true,
             frame::Event::Flags { flags: WEnum::Value(fl) } => st.y_invert = fl.contains(frame::Flags::YInvert),
             frame::Event::Ready { .. } => st.ready = true,
@@ -97,6 +111,8 @@ delegate_noop!(State: ignore wl_shm::WlShm);
 delegate_noop!(State: ignore wl_shm_pool::WlShmPool);
 delegate_noop!(State: ignore wl_buffer::WlBuffer);
 delegate_noop!(State: ZwlrScreencopyManagerV1);
+delegate_noop!(State: ignore ZwpLinuxDmabufV1);
+delegate_noop!(State: ignore ZwpLinuxBufferParamsV1);
 
 /// Reads and dispatches events for up to `timeout`.
 fn dispatch_for(q: &mut EventQueue<State>, st: &mut State, timeout: Duration) -> Result<()> {
@@ -189,17 +205,57 @@ fn gst_format(f: wl_shm::Format) -> Option<&'static str> {
     })
 }
 
+/// What frames come as.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Format {
+    /// Tightly packed rows of this GStreamer raw format.
+    Raw(&'static str),
+    /// NV12 DMA-BUFs with this DRM modifier.
+    DmaNv12(u64),
+}
+
+/// A captured frame.
+pub enum Frame<'a> {
+    Packed(Vec<u8>),
+    Dma(&'a DmaFrame),
+}
+
+/// Where the compositor copies to.
+enum Target {
+    Shm(ShmBuffer),
+    Gpu { conv: Box<crate::gpuconv::GpuConv>, buffer: wl_buffer::WlBuffer, offer: (u32, u32, u32) },
+}
+
 /// A compositor connection set up to capture one output.
 pub struct Opened {
     queue: EventQueue<State>,
     state: State,
     output: wl_output::WlOutput,
-    buffer: ShmBuffer,
+    target: Target,
     pub width: u32,
     pub height: u32,
-    /// GStreamer raw format of the frames.
-    pub format: &'static str,
+    pub format: Format,
     _conn: Connection,
+}
+
+/// NV12 buffers for the encoder: it keeps an input buffer while its
+/// picture is a reference, plus one queued and two in the source.
+const OUTPUTS: usize = 6;
+
+/// The GPU target for a DMA-BUF offer, if everything on the way works.
+fn gpu_target(state: &State, qh: &QueueHandle<State>, offer: (u32, u32, u32)) -> Result<Target> {
+    let dmabuf = state.dmabuf.as_ref().context("the compositor has no linux-dmabuf")?;
+    let node = std::env::var("QR_RENDER_NODE").unwrap_or_else(|_| "/dev/dri/renderD128".into());
+    let (fourcc, w, h) = offer;
+    let conv = crate::gpuconv::GpuConv::new(&node, w, h, fourcc, OUTPUTS)?;
+    let params = dmabuf.create_params(qh, ());
+    let bo = &conv.capture;
+    for (i, (fd, offset, stride)) in bo.planes.iter().enumerate() {
+        params.add(fd.as_fd(), i as u32, *offset, *stride, (bo.modifier >> 32) as u32, bo.modifier as u32);
+    }
+    let buffer = params.create_immed(w as i32, h as i32, fourcc, zwp_linux_buffer_params_v1::Flags::empty(), qh, ());
+    params.destroy();
+    Ok(Target::Gpu { conv: Box::new(conv), buffer, offer })
 }
 
 /// Connects to the compositor at `socket` and prepares to capture
@@ -232,11 +288,41 @@ pub fn open(socket: &Path, output: &str) -> Result<Opened> {
         dispatch_for(&mut queue, &mut state, Duration::from_millis(100))?;
     }
     f.destroy();
+    let gpu = match (state.dma_buffer, std::env::var("QR_VD_CAPTURE").as_deref()) {
+        (_, Ok("shm")) => None,
+        (None, _) => {
+            tracing::info!("the compositor offers no DMA-BUF frames: capturing through shared memory");
+            None
+        }
+        (Some(offer), _) => match gpu_target(&state, &qh, offer) {
+            Ok(t) => Some(t),
+            Err(e) => {
+                tracing::warn!("zero-copy capture is off, using shared memory: {e:#}");
+                None
+            }
+        },
+    };
+    if let Some(target) = gpu {
+        let Target::Gpu { conv, .. } = &target else { unreachable!() };
+        let (w, h, modifier) = (conv.capture.width, conv.capture.height, crate::gpuconv::I915_Y_TILED);
+        tracing::info!(w, h, "zero-copy capture");
+        state.reset_frame();
+        return Ok(Opened { queue, state, output: out, target, width: w, height: h, format: Format::DmaNv12(modifier), _conn: conn });
+    }
     let key = state.shm_buffer.context("the compositor offered no shared-memory buffer")?;
     let format = gst_format(key.0).with_context(|| format!("unsupported frame format {:?}", key.0))?;
     let buffer = ShmBuffer::new(&shm, &qh, key)?;
     state.reset_frame();
-    Ok(Opened { queue, state, output: out, buffer, width: key.1, height: key.2, format, _conn: conn })
+    Ok(Opened {
+        queue,
+        state,
+        output: out,
+        target: Target::Shm(buffer),
+        width: key.1,
+        height: key.2,
+        format: Format::Raw(format),
+        _conn: conn,
+    })
 }
 
 /// A running capture; dropping it stops the thread.
@@ -255,9 +341,8 @@ impl Drop for ScreenCopy {
 }
 
 impl Opened {
-    /// Captures on a thread, handing each frame (tightly packed rows) to
-    /// `on_frame`.
-    pub fn run(self, keepalive: Duration, mut on_frame: impl FnMut(Vec<u8>) + Send + 'static) -> ScreenCopy {
+    /// Captures on a thread, handing each frame to `on_frame`.
+    pub fn run(self, keepalive: Duration, mut on_frame: impl FnMut(Frame<'_>) + Send + 'static) -> ScreenCopy {
         let stop = Arc::new(AtomicBool::new(false));
         let stop2 = stop.clone();
         let thread = std::thread::Builder::new()
@@ -271,19 +356,30 @@ impl Opened {
         ScreenCopy { stop, thread: Some(thread) }
     }
 
-    fn capture_loop(mut self, stop: &AtomicBool, keepalive: Duration, on_frame: &mut dyn FnMut(Vec<u8>)) -> Result<()> {
+    fn capture_loop(mut self, stop: &AtomicBool, keepalive: Duration, on_frame: &mut dyn FnMut(Frame<'_>)) -> Result<()> {
         let qh = self.queue.handle();
+        if let Target::Gpu { conv, .. } = &self.target {
+            conv.bind()?;
+        }
         let manager = self.state.manager.clone().expect("checked in open");
-        let mut last: Option<Vec<u8>> = None;
+        // A full copy (not waiting for damage): the first frame, and a still
+        // screen's repeat after `keepalive`.
+        let mut full = true;
         let mut last_sent = Instant::now();
         let mut warned = false;
+        // Per-second timing (debug log): frames, compositor copy, packing.
+        let (mut n, mut copy_t, mut pack_t, mut since) = (0u32, Duration::ZERO, Duration::ZERO, Instant::now());
         while !stop.load(Ordering::Relaxed) {
             self.state.reset_frame();
             let f = manager.capture_output(1, &self.output, &qh, ());
             while !self.state.buffer_done && !self.state.failed && !stop.load(Ordering::Relaxed) {
                 dispatch_for(&mut self.queue, &mut self.state, Duration::from_millis(100))?;
             }
-            if self.state.failed || self.state.shm_buffer != Some(self.buffer.key) {
+            let same = match &self.target {
+                Target::Shm(b) => self.state.shm_buffer == Some(b.key),
+                Target::Gpu { offer, .. } => self.state.dma_buffer == Some(*offer),
+            };
+            if self.state.failed || !same {
                 // The output changed size (a resize restarts the stream
                 // with a new capture) or went away.
                 if !warned {
@@ -294,30 +390,49 @@ impl Opened {
                 std::thread::sleep(Duration::from_millis(50));
                 continue;
             }
-            // The first frame unconditionally; then only on change.
-            if last.is_none() {
-                f.copy(&self.buffer.buffer);
+            let asked = Instant::now();
+            let wl = match &self.target {
+                Target::Shm(b) => &b.buffer,
+                Target::Gpu { buffer, .. } => buffer,
+            };
+            if full {
+                f.copy(wl);
             } else {
-                f.copy_with_damage(&self.buffer.buffer);
+                f.copy_with_damage(wl);
             }
+            full = false;
             while !self.state.ready && !self.state.failed && !stop.load(Ordering::Relaxed) {
                 let wait = keepalive.saturating_sub(last_sent.elapsed()).min(Duration::from_millis(100));
                 dispatch_for(&mut self.queue, &mut self.state, wait)?;
-                if !self.state.ready
-                    && let Some(l) = &last
-                    && last_sent.elapsed() >= keepalive
-                {
-                    on_frame(l.clone());
-                    last_sent = Instant::now();
+                if !self.state.ready && last_sent.elapsed() >= keepalive {
+                    full = true;
+                    break;
                 }
             }
             if self.state.ready {
-                let p = self.buffer.packed(self.state.y_invert);
-                on_frame(p.clone());
-                last = Some(p);
+                let packing = Instant::now();
+                copy_t += packing - asked;
+                match &mut self.target {
+                    Target::Shm(b) => on_frame(Frame::Packed(b.packed(self.state.y_invert))),
+                    Target::Gpu { conv, .. } => match conv.convert(self.state.y_invert) {
+                        Some(d) => on_frame(Frame::Dma(d)),
+                        None => tracing::debug!("frame skipped: every GPU buffer is with the encoder"),
+                    },
+                }
+                pack_t += packing.elapsed();
+                n += 1;
                 last_sent = Instant::now();
             }
             f.destroy();
+            if since.elapsed() >= Duration::from_secs(1) && n > 0 {
+                tracing::debug!(
+                    frames = n,
+                    copy_ms = copy_t.as_secs_f64() * 1000.0 / n as f64,
+                    pack_ms = pack_t.as_secs_f64() * 1000.0 / n as f64,
+                    "capture"
+                );
+                (n, copy_t, pack_t, since) = (0, Duration::ZERO, Duration::ZERO, Instant::now());
+            }
         }
         Ok(())
     }
