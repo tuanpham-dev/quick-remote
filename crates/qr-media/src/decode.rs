@@ -44,6 +44,7 @@ pub struct Decoder {
     src: gst_app::AppSrc,
     pushed: Arc<Mutex<VecDeque<(u32, std::time::Instant)>>>,
     pub element: String,
+    codec: Codec,
 }
 
 impl Decoder {
@@ -126,13 +127,16 @@ impl Decoder {
         );
         pipeline.set_state(gst::State::Playing).context("starting the decode pipeline")?;
 
-        Ok(Self { pipeline, src, pushed, element: element.to_string() })
+        Ok(Self { pipeline, src, pushed, element: element.to_string(), codec })
     }
 
     /// Feeds one access unit. Frames come out in order (no B-frames), so the
     /// frame id is matched by order.
     pub fn push(&self, frame_id: u32, au: &[u8], keyframe: bool) -> Result<()> {
-        let mut buf = gst::Buffer::from_slice(au.to_vec());
+        // Keyframes carry the SPS: make sure it leaves the decoder a free
+        // DPB slot (see `h264`), else every picture waits for the next.
+        let fixed = (keyframe && self.codec == Codec::H264).then(|| crate::h264::fix_au(au)).flatten();
+        let mut buf = gst::Buffer::from_slice(fixed.unwrap_or_else(|| au.to_vec()));
         {
             let b = buf.get_mut().expect("unique");
             b.set_pts(gst::ClockTime::from_useconds(frame_id as u64 * 1000));

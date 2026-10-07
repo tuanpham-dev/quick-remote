@@ -2,6 +2,7 @@
 //! low-latency encode pipeline (host), the decode pipeline (client) and
 //! Opus audio.
 
+pub mod h264;
 pub mod audio;
 pub mod decode;
 pub mod encode;
