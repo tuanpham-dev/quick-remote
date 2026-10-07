@@ -32,6 +32,7 @@ phase1)
 	run lan vd_audio
 	run lan vd_3d
 	run lan vd_clip
+	run lan gnome_clip
 	;;
 phase2)
 	NAT_MODE=cone run nat-cone a4

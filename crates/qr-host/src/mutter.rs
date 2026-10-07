@@ -163,6 +163,121 @@ impl MutterSession {
         }
         Ok(MutterInput { tx, streams: self.streams.iter().map(|s| (s.monitor.clone(), s.path.clone())).collect() })
     }
+
+    /// The desktop's clipboard through the session's selection API. Same
+    /// interface as `qr_clip::spawn`. Needs the tokio runtime.
+    pub async fn clipboard(
+        &self,
+    ) -> Result<(std::sync::mpsc::Sender<qr_clip::Command>, std::sync::mpsc::Receiver<qr_clip::Content>)> {
+        use qr_clip::{Command, Content};
+        const TEXT: &str = "text/plain;charset=utf-8";
+        const PNG: &str = "image/png";
+        let p =
+            zbus::Proxy::new(&self.conn, RD, self.rd_session.clone(), "org.gnome.Mutter.RemoteDesktop.Session").await?;
+        let no_opts: HashMap<&str, Value> = HashMap::new();
+        let _: () = p.call("EnableClipboard", &(no_opts,)).await.context("enabling the clipboard")?;
+        let mut owner_changed = p.receive_signal("SelectionOwnerChanged").await?;
+        let mut transfer = p.receive_signal("SelectionTransfer").await?;
+        let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<Command>();
+        let (out_tx, out_rx) = std::sync::mpsc::channel::<Content>();
+        // The sync command channel, into the async loop.
+        let (atx, mut arx) = tokio::sync::mpsc::unbounded_channel::<Command>();
+        std::thread::spawn(move || {
+            while let Ok(c) = cmd_rx.recv() {
+                if atx.send(c).is_err() {
+                    return;
+                }
+            }
+        });
+        tokio::spawn(async move {
+            let mut owned: Option<Content> = None;
+            let mut last: Option<([u8; 32], std::time::Instant)> = None;
+            loop {
+                tokio::select! {
+                    Some(Command::Set(c)) = arx.recv() => {
+                        let mime = match &c { Content::Text(_) => TEXT, Content::Png(_) => PNG };
+                        let mut o: HashMap<&str, Value> = HashMap::new();
+                        o.insert("mime-types", Value::from(vec![mime]));
+                        if let Err(e) = p.call::<_, _, ()>("SetSelection", &(o,)).await {
+                            tracing::debug!("setting the selection: {e}");
+                            continue;
+                        }
+                        last = Some((c.hash(), std::time::Instant::now()));
+                        owned = Some(c);
+                    }
+                    Some(m) = transfer.next() => {
+                        // An app pastes what we own: write it to mutter.
+                        let Ok((mime, serial)): zbus::Result<(String, u32)> = m.body().deserialize() else { continue };
+                        let data = match (&owned, mime.as_str()) {
+                            (Some(Content::Text(t)), m) if m.starts_with("text/") => Some(t.clone().into_bytes()),
+                            (Some(Content::Png(d)), PNG) => Some(d.clone()),
+                            _ => None,
+                        };
+                        let fd: zbus::Result<zbus::zvariant::OwnedFd> = p.call("SelectionWrite", &(serial,)).await;
+                        let ok = match (fd, data) {
+                            (Ok(fd), Some(d)) => tokio::task::spawn_blocking(move || {
+                                use std::io::Write;
+                                let fd = std::os::fd::OwnedFd::from(fd);
+                                blocking(&fd);
+                                let mut f = std::fs::File::from(fd);
+                                f.write_all(&d).is_ok()
+                            })
+                            .await
+                            .unwrap_or(false),
+                            _ => false,
+                        };
+                        let _: zbus::Result<()> = p.call("SelectionWriteDone", &(serial, ok)).await;
+                    }
+                    Some(m) = owner_changed.next() => {
+                        // Someone else copied: read it.
+                        let opts: HashMap<String, OwnedValue> = match m.body().deserialize::<(HashMap<String, OwnedValue>,)>() {
+                            Ok((o,)) => o,
+                            Err(e) => {
+                                tracing::debug!("selection owner change: {e}");
+                                continue;
+                            }
+                        };
+                        let ours = opts.get("session-is-owner").and_then(|v| bool::try_from(v).ok()).unwrap_or(false);
+                        tracing::debug!(ours, ?opts, "selection owner changed");
+                        if ours {
+                            continue;
+                        }
+                        owned = None;
+                        let mimes = opts.get("mime-types").map(mime_list).unwrap_or_default();
+                        let mime = if mimes.iter().any(|m| m == PNG) {
+                            PNG
+                        } else if mimes.iter().any(|m| m.starts_with("text/plain")) {
+                            TEXT
+                        } else {
+                            continue;
+                        };
+                        let fd: zbus::zvariant::OwnedFd = match p.call("SelectionRead", &(mime,)).await {
+                            Ok(fd) => fd,
+                            Err(e) => {
+                                tracing::debug!("reading the selection: {e}");
+                                continue;
+                            }
+                        };
+                        let out = out_tx.clone();
+                        let prev = last;
+                        tokio::task::spawn_blocking(move || {
+                            use std::io::Read;
+                            let mut data = Vec::new();
+                            let fd = std::os::fd::OwnedFd::from(fd);
+                            blocking(&fd);
+                            let _ = std::fs::File::from(fd).take(64 << 20).read_to_end(&mut data);
+                            let c = if mime == PNG { Content::Png(data) } else { Content::Text(String::from_utf8_lossy(&data).into_owned()) };
+                            if !prev.is_some_and(|(h, t)| h == c.hash() && t.elapsed() < std::time::Duration::from_secs(2)) {
+                                let _ = out.send(c);
+                            }
+                        });
+                    }
+                    else => return,
+                }
+            }
+        });
+        Ok((cmd_tx, out_rx))
+    }
 }
 
 impl Drop for MutterSession {
@@ -183,6 +298,29 @@ enum Call {
     Abs(OwnedObjectPath, f64, f64),
     Rel(f64, f64),
     Axis(u32, i32),
+}
+
+/// mutter's selection pipes come non-blocking: read and write them in full.
+fn blocking(fd: &std::os::fd::OwnedFd) {
+    use std::os::fd::AsRawFd;
+    // SAFETY: flag changes on our own fd.
+    unsafe {
+        let fl = libc::fcntl(fd.as_raw_fd(), libc::F_GETFL);
+        if fl >= 0 {
+            libc::fcntl(fd.as_raw_fd(), libc::F_SETFL, fl & !libc::O_NONBLOCK);
+        }
+    }
+}
+
+/// A `mime-types` option: an array of strings, or (as mutter sends it in
+/// `SelectionOwnerChanged`) a one-field structure holding one.
+fn mime_list(v: &OwnedValue) -> Vec<String> {
+    let strings = |v: &Value| -> Option<Vec<String>> { Vec::<String>::try_from(v.try_clone().ok()?).ok() };
+    match &**v {
+        Value::Structure(s) => s.fields().first().and_then(strings),
+        other => strings(other),
+    }
+    .unwrap_or_default()
 }
 
 /// Input through the remote-desktop session.

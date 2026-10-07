@@ -137,7 +137,7 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
     let files = qr_net::files::Files::new(conn.clone(), ctx.files_dir(), 2);
     let uni_task = tokio::spawn(uni_streams(ctx.clone(), conn.clone(), files.clone(), ctl.clone()));
     let outbox_task = tokio::spawn(crate::outbox::run(ctx.outbox_dir(), files.clone(), ctl.clone()));
-    let clipboard = crate::clipboard::start(&ctx, ctl.clone());
+    let clipboard = crate::clipboard::start(&ctx, ctl.clone()).await;
 
     // Stats once a second.
     let stats_task = {
