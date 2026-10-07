@@ -90,9 +90,9 @@ pub struct Args {
     /// `pulse[:<device>]`, `default`.
     #[arg(long, default_value = "auto")]
     audio: String,
-    /// Where the client's microphone goes: `none`, `file:<wav>`,
-    /// `pipewire:<target>`.
-    #[arg(long, default_value = "none")]
+    /// Where the client's microphone goes: `auto` (the virtual display's
+    /// microphone, else nowhere), `none`, `file:<wav>`, `pipewire:<target>`.
+    #[arg(long, default_value = "auto")]
     mic_out: String,
     /// Where files from clients are saved (default ~/Downloads/QuickRemote).
     #[arg(long)]

@@ -16,9 +16,20 @@ fn audio_source(ctx: &HostCtx) -> Option<AudioSource> {
     Some(match a.split_once(':').unwrap_or((a, "")) {
         ("none", _) => return None,
         ("auto", _) if ctx.args.source.starts_with("test") => AudioSource::Test { wave: "ticks".into() },
+        // What apps in the virtual display play.
+        ("auto", _) if ctx.vd.is_some() => {
+            let fd = match ctx.vd.as_ref().expect("checked").lock().expect("lock").pipewire_fd() {
+                Ok(fd) => fd,
+                Err(e) => {
+                    tracing::warn!("no audio from the virtual display: {e:#}");
+                    return None;
+                }
+            };
+            AudioSource::PipeWire { target: "qr-out".into(), sink: true, fd: Some(fd) }
+        }
         ("auto", _) | ("default", _) => AudioSource::Default,
         ("test", w) => AudioSource::Test { wave: if w.is_empty() { "sine".into() } else { w.into() } },
-        ("pipewire", t) => AudioSource::PipeWire { target: t.into() },
+        ("pipewire", t) => AudioSource::PipeWire { target: t.into(), sink: false, fd: None },
         ("pulse", d) => AudioSource::Pulse { device: (!d.is_empty()).then(|| d.into()) },
         _ => AudioSource::Default,
     })
@@ -42,31 +53,32 @@ fn mic_sink(ctx: &HostCtx) -> Result<Option<AudioSink>> {
     let m = ctx.args.mic_out.as_str();
     Ok(match m.split_once(':').unwrap_or((m, "")) {
         ("none", _) => None,
+        // The virtual display's microphone, for apps there.
+        ("auto", _) => match &ctx.vd {
+            Some(vd) => Some(AudioSink::PipeWire { target: "qr-mic-in".into(), fd: Some(vd.lock().expect("lock").pipewire_fd()?) }),
+            None => None,
+        },
         ("file", p) => Some(AudioSink::File { path: p.into() }),
-        ("pipewire", t) => Some(AudioSink::PipeWire { target: t.into() }),
-        _ => bail!("--mic-out must be none, file:<wav> or pipewire:<target>"),
+        ("pipewire", t) => Some(AudioSink::PipeWire { target: t.into(), fd: None }),
+        _ => bail!("--mic-out must be auto, none, file:<wav> or pipewire:<target>"),
     })
 }
 
 /// Reads datagrams from the client until the connection ends.
 pub async fn datagram_loop(ctx: Arc<HostCtx>, conn: quinn::Connection) {
     let mut mic: Option<AudioPlayer> = None;
-    let sink = mic_sink(&ctx).unwrap_or_else(|e| {
-        tracing::warn!("{e}");
-        None
-    });
+    // Set up on the first microphone packet (a virtual display's sink
+    // opens a PipeWire connection).
+    let mut mic_tried = false;
     while let Ok(d) = conn.read_datagram().await {
         match d.first() {
             Some(&kind::MIC) => {
-                let Some(sink) = &sink else { continue };
                 let Ok(p) = AudioPacket::decode(&d) else { continue };
-                if mic.is_none() {
-                    match AudioPlayer::start(sink, 1) {
-                        Ok(m) => mic = Some(m),
-                        Err(e) => {
-                            tracing::warn!("microphone output failed: {e:#}");
-                            continue;
-                        }
+                if mic.is_none() && !mic_tried {
+                    mic_tried = true;
+                    match mic_sink(&ctx).and_then(|s| s.map(|s| AudioPlayer::start(&s, 1)).transpose()) {
+                        Ok(m) => mic = m,
+                        Err(e) => tracing::warn!("microphone output failed: {e:#}"),
                     }
                 }
                 if let Some(m) = &mic {

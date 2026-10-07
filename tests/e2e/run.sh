@@ -17,6 +17,8 @@ phase1)
 	# Virtual display (ENV-BLOCKED without the render group).
 	run lan a16
 	run lan vd_input
+	run lan vd_audio
+	run lan vd_3d
 	;;
 phase2)
 	NAT_MODE=cone run nat-cone a4

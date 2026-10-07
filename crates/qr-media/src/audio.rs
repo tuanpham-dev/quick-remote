@@ -12,8 +12,9 @@ use crate::{ClockMap, init};
 pub enum AudioSource {
     /// `audiotestsrc` with the given wave (`sine`, `ticks`, …).
     Test { wave: String },
-    /// A PipeWire node or sink monitor (`target-object`).
-    PipeWire { target: String },
+    /// A PipeWire node, or a sink's monitor (`sink`). `fd`: a connection
+    /// to another PipeWire instance (a virtual display's), taken over.
+    PipeWire { target: String, sink: bool, fd: Option<i32> },
     /// The default PulseAudio/PipeWire-Pulse input (or `device`).
     Pulse { device: Option<String> },
     /// The system's default input (`autoaudiosrc`).
@@ -27,8 +28,10 @@ pub enum AudioSource {
 #[derive(Debug, Clone)]
 pub enum AudioSink {
     Default,
+    /// A PipeWire node; `fd` as for [`AudioSource::PipeWire`].
     PipeWire {
         target: String,
+        fd: Option<i32>,
     },
     /// Writes a WAV file (tests).
     File {
@@ -41,7 +44,11 @@ pub const RATE: u32 = 48_000;
 fn source_desc(s: &AudioSource) -> String {
     match s {
         AudioSource::Test { wave } => format!("audiotestsrc is-live=true wave={wave} volume=0.5"),
-        AudioSource::PipeWire { target } => format!("pipewiresrc target-object={target} do-timestamp=true"),
+        AudioSource::PipeWire { target, sink, fd } => {
+            let fd = fd.map(|f| format!(" fd={f}")).unwrap_or_default();
+            let props = if *sink { " stream-properties=\"props,stream.capture.sink=true\"" } else { "" };
+            format!("pipewiresrc{fd} target-object={target}{props} do-timestamp=true")
+        }
         AudioSource::Pulse { device } => {
             let d = device.as_ref().map(|d| format!(" device={d}")).unwrap_or_default();
             format!("pulsesrc{d} buffer-time=10000 latency-time=5000 do-timestamp=true")
@@ -77,6 +84,10 @@ impl AudioCapture {
             .with_context(|| format!("building {desc}"))?
             .downcast::<gst::Pipeline>()
             .map_err(|_| anyhow!("not a pipeline"))?;
+        // Capture times are mapped from the system clock; pipewiresrc would
+        // otherwise make its graph's clock the pipeline's (another PipeWire
+        // instance's started at its own zero: seconds off).
+        pipeline.use_clock(Some(&gst::SystemClock::obtain()));
         let sink = pipeline.by_name("out").expect("named").downcast::<gst_app::AppSink>().expect("appsink");
         let pl = pipeline.downgrade();
         sink.set_callbacks(
@@ -128,7 +139,10 @@ impl AudioPlayer {
         init()?;
         let out = match sink {
             AudioSink::Default => format!("autoaudiosink sync=false buffer-time={PLAYOUT_US} latency-time=5000"),
-            AudioSink::PipeWire { target } => format!("pipewiresink target-object={target} sync=false"),
+            AudioSink::PipeWire { target, fd } => {
+                let fd = fd.map(|f| format!(" fd={f}")).unwrap_or_default();
+                format!("pipewiresink{fd} target-object={target} sync=false")
+            }
             AudioSink::File { path } => format!("wavenc ! filesink location={path}"),
         };
         let desc = format!(

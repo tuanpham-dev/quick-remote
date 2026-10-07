@@ -56,6 +56,34 @@ impl VirtualDisplay {
         let _ = std::fs::remove_dir_all(&rt);
         std::fs::create_dir_all(rt.join("cfg/xdg-desktop-portal"))?;
         std::fs::create_dir_all(rt.join("cfg/xdg-desktop-portal-wlr"))?;
+        std::fs::create_dir_all(rt.join("cfg/pipewire/pipewire.conf.d"))?;
+        std::fs::create_dir_all(rt.join("cfg/wireplumber/wireplumber.conf.d"))?;
+        // Audio: apps play into `qr-out` (captured for the client) and
+        // record from `qr-mic` (the client's microphone). The machine's own
+        // sound devices stay out of it.
+        std::fs::write(
+            rt.join("cfg/pipewire/pipewire.conf.d/quickremote.conf"),
+            // The microphone is a loopback: the host plays into the sink
+            // `qr-mic-in`, apps record from the source `qr-mic` (a stream
+            // can't play into a source node).
+            r#"context.objects = [
+  { factory = adapter args = { factory.name = support.null-audio-sink node.name = "qr-out"
+      node.description = "QuickRemote" media.class = Audio/Sink audio.position = [ FL FR ] } }
+]
+context.modules = [
+  { name = libpipewire-module-loopback args = {
+      node.description = "QuickRemote microphone"
+      capture.props = { node.name = "qr-mic-in" media.class = Audio/Sink audio.position = [ MONO ] }
+      playback.props = { node.name = "qr-mic" media.class = Audio/Source audio.position = [ MONO ] } } }
+]
+"#,
+        )?;
+        std::fs::write(
+            rt.join("cfg/wireplumber/wireplumber.conf.d/quickremote.conf"),
+            "wireplumber.profiles = {\n  main = {\n    monitor.alsa = disabled\n    monitor.alsa-midi = disabled\n    \
+             monitor.bluez = disabled\n    monitor.bluez.midi = disabled\n    monitor.v4l2 = disabled\n    \
+             monitor.libcamera = disabled\n  }\n}\n",
+        )?;
         std::os::unix::fs::PermissionsExt::set_mode(&mut std::fs::metadata(&rt)?.permissions(), 0o700);
         std::fs::set_permissions(&rt, std::os::unix::fs::PermissionsExt::from_mode(0o700))?;
         // Portals: wlr for screencast; the output to capture is whatever
@@ -112,6 +140,7 @@ impl VirtualDisplay {
         me.children.push(("pipewire", spawn("pipewire", &mut cmd("pipewire", &env), &log("pipewire"))?));
         wait_for(&rt.join("pipewire-0"), "PipeWire", Duration::from_secs(5))?;
         me.children.push(("wireplumber", spawn("wireplumber", &mut cmd("wireplumber", &env), &log("wireplumber"))?));
+        me.children.push(("pipewire-pulse", spawn("pipewire-pulse", &mut cmd("pipewire-pulse", &env), &log("pipewire-pulse"))?));
 
         let mut c = cmd("sway", &env);
         c.args(["-c", &rt.join("sway.conf").display().to_string()]);
@@ -153,7 +182,37 @@ impl VirtualDisplay {
             spawn("xdg-desktop-portal", &mut cmd("/usr/libexec/xdg-desktop-portal", &env), &log("xdp"))?,
         ));
         me.env = env;
+        me.default_audio();
         Ok(me)
+    }
+
+    /// Makes `qr-out` and `qr-mic` the defaults (best effort: with the
+    /// hardware monitors off they are the only ones anyway).
+    fn default_audio(&self) {
+        let end = Instant::now() + Duration::from_secs(3);
+        for (key, node) in [("default.configured.audio.sink", "qr-out"), ("default.configured.audio.source", "qr-mic")] {
+            loop {
+                let ok = Command::new("pw-metadata")
+                    .envs(self.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+                    .args(["-n", "default", "0", key, &format!("{{ \"name\": \"{node}\" }}"), "Spa:String:JSON"])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .is_ok_and(|s| s.success());
+                if ok || Instant::now() > end {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
+
+    /// A new connection to the display's PipeWire, for `pipewiresrc` /
+    /// `pipewiresink fd=` (which take it over).
+    pub fn pipewire_fd(&self) -> Result<i32> {
+        use std::os::fd::IntoRawFd;
+        let s = std::os::unix::net::UnixStream::connect(self.runtime.join("pipewire-0")).context("connecting to the display's PipeWire")?;
+        Ok(s.into_raw_fd())
     }
 
     /// The display's Wayland socket.
