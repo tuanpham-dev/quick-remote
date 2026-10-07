@@ -8,7 +8,14 @@ export LOGDIR="${LOGDIR:-$(mktemp -d "$here/../../out/e2e.XXXXXX")}"
 export RESULTS="$LOGDIR/results.txt"
 : >"$RESULTS"
 cargo build -q -p qr-host -p qr-client --manifest-path "$here/../../Cargo.toml" || exit 1
-run() { "$here/netns.sh" "$1" "$here/$2.sh" || echo "ERROR script $2 exited $?" | tee -a "$RESULTS"; }
+# Each script gets its own log directory (client configs inside would
+# otherwise remember another script's host at the same address).
+base="$LOGDIR"
+run() {
+	local dir="$base/$2.$1"
+	mkdir -p "$dir"
+	LOGDIR="$dir" "$here/netns.sh" "$1" "$here/$2.sh" || echo "ERROR script $2 exited $?" | tee -a "$RESULTS"
+}
 case "${1:-phase1}" in
 phase1)
 	run lan a1_a2
@@ -31,6 +38,6 @@ phase2)
 	;;
 *) run "${2:-lan}" "$1" ;;
 esac
-echo "--- summary ($LOGDIR)"
+echo "--- summary ($base)"
 sort "$RESULTS" | uniq
 ! grep -qE '^(FAIL|ERROR)' "$RESULTS"

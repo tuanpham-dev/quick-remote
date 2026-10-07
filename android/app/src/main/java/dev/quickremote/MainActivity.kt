@@ -34,7 +34,9 @@ class MainActivity : Activity() {
         root.addView(Button(this).apply { text = "Connect"; setOnClickListener { connect(addr.text.toString().trim(), null) } })
         root.addView(Button(this).apply { text = "Refresh"; setOnClickListener { discover() } })
         setContentView(ScrollView(this).apply { addView(root) })
-        discover()
+        // Tests and shortcuts: am start … --es connect <addr> [--es pin <pin>]
+        val target = intent.getStringExtra("connect")
+        if (target != null) connect(target, intent.getStringExtra("pin")) else discover()
     }
 
     private fun discover() {

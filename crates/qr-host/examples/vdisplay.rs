@@ -1,6 +1,7 @@
 //! Smoke test of the virtual display: start it, cast it through the
 //! portal, encode a few seconds, resize, add an output, report.
 #[path = "../src/vdisplay.rs"]
+#[allow(dead_code)]
 mod vdisplay;
 #[path = "../src/portal.rs"]
 mod portal;

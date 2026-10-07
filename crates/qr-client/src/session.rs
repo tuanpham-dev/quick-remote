@@ -12,7 +12,7 @@ use qr_fec::{Event, Reassembler};
 use qr_media::audio::{AudioCapture, AudioPlayer, AudioSink, AudioSource, PLAYOUT_US};
 use qr_media::decode::{DecodedFrame, Decoder};
 use qr_media::probe::DecoderInfo;
-use qr_net::clock::{ClockSync, instant_to_us, now_us};
+use qr_net::clock::{ClockSync, now_us};
 use qr_net::keystore::KeyStore;
 use qr_net::session::{FramedSend, client_handshake};
 use qr_net::{Fingerprint, Identity, endpoint};

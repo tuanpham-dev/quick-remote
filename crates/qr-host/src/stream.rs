@@ -28,12 +28,9 @@ pub struct StreamCounters {
 }
 
 pub struct VideoStream {
-    pub id: u8,
     pub encoder: Arc<Encoder>,
     pub rate: Mutex<RateCtl>,
     pub counters: Arc<StreamCounters>,
-    pub width: u32,
-    pub height: u32,
     last_keyframe_req: Mutex<Option<Instant>>,
     /// Parity ratio and loss estimate ×1000, read by the sender per frame.
     parity: Arc<AtomicU32>,
@@ -87,12 +84,9 @@ impl VideoStream {
             next_frame,
         ));
         let s = Arc::new(Self {
-            id,
             encoder,
             rate: Mutex::new(rate),
             counters,
-            width: cfg.width,
-            height: cfg.height,
             last_keyframe_req: Mutex::new(None),
             parity,
             loss,

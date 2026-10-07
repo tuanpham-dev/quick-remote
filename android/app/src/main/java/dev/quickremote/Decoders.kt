@@ -166,6 +166,8 @@ class Stats {
             val secs = (t - windowStart) / 1e9f
             fps = frames / secs
             latencyMs = if (latN > 0) latSum / latN / 1000f else 0f
+            android.util.Log.i("QuickRemote", "stats fps=%.1f latency_ms=%.1f decode_ms=%.1f codec=%s".format(
+                fps, latencyMs, decodeUs / 1000f, codec))
             frames = 0; latSum = 0; latN = 0; windowStart = t
         }
     }

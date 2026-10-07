@@ -3,6 +3,10 @@
 //! display (on its private bus) and for real Wayland desktops (on the
 //! session bus, with a restore token so permission is asked once).
 
+// Kept for desktops reachable only through the portal (KDE); not wired yet:
+// GNOME goes through mutter's API, wlroots desktops through screencopy.
+#![allow(dead_code)]
+
 use std::os::fd::{AsRawFd, OwnedFd};
 
 use anyhow::{Context, Result};

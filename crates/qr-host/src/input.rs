@@ -71,7 +71,6 @@ pub mod xtest {
     use x11rb::protocol::xproto::{self, ConnectionExt as _};
     use x11rb::protocol::xtest::ConnectionExt as _;
     use x11rb::rust_connection::RustConnection;
-    use x11rb::wrapper::ConnectionExt as _;
 
     const KEY_PRESS: u8 = 2;
     const KEY_RELEASE: u8 = 3;
@@ -264,14 +263,6 @@ pub mod xtest {
         let (conn, screen) = x11rb::connect(Some(display))?;
         let s = &conn.setup().roots[screen];
         Ok((s.width_in_pixels, s.height_in_pixels))
-    }
-
-    /// The pointer position on `display` (tests).
-    pub fn pointer(display: &str) -> Result<(i16, i16)> {
-        let (conn, screen) = x11rb::connect(Some(display))?;
-        let root = conn.setup().roots[screen].root;
-        let r = conn.query_pointer(root)?.reply()?;
-        Ok((r.root_x, r.root_y))
     }
 }
 

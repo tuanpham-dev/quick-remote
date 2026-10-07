@@ -89,10 +89,6 @@ impl RateCtl {
         r
     }
 
-    pub fn limits(&self) -> &Limits {
-        &self.limits
-    }
-
     /// Applies one feedback report. Returns true when target, fps or
     /// parity changed.
     pub fn on_feedback(&mut self, fb: &Feedback, now: Instant) -> bool {

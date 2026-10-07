@@ -48,7 +48,6 @@ const GBM_BO_USE_RENDERING: u32 = 1 << 2;
 const fn fourcc(s: &[u8; 4]) -> u32 {
     (s[0] as u32) | (s[1] as u32) << 8 | (s[2] as u32) << 16 | (s[3] as u32) << 24
 }
-pub const DRM_NV12: u32 = fourcc(b"NV12");
 const DRM_R8: u32 = fourcc(b"R8  ");
 const DRM_GR88: u32 = fourcc(b"GR88");
 /// Intel Y-tiling: what the VA encoder's DMA-BUF input takes.
@@ -59,7 +58,6 @@ pub struct Bo {
     bo: *mut GbmBo,
     pub width: u32,
     pub height: u32,
-    pub format: u32,
     pub modifier: u64,
     pub planes: Vec<(OwnedFd, u32, u32)>,
 }
@@ -85,7 +83,7 @@ impl Bo {
                 }
                 planes.push((OwnedFd::from_raw_fd(fd), gbm_bo_get_offset(bo, p), gbm_bo_get_stride_for_plane(bo, p)));
             }
-            Ok(Self { bo, width: w, height: h, format, modifier: gbm_bo_get_modifier(bo), planes })
+            Ok(Self { bo, width: w, height: h, modifier: gbm_bo_get_modifier(bo), planes })
         }
     }
 }
