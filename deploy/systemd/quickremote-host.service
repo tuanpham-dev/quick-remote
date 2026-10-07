@@ -1,0 +1,15 @@
+# User service: the host in your own graphical session (no login screen).
+# Install: copy to ~/.config/systemd/user/, then
+#   systemctl --user enable --now quickremote-host
+[Unit]
+Description=QuickRemote host
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/qr-host
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

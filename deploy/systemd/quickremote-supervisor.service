@@ -1,0 +1,16 @@
+# System service: keeps a QuickRemote host running in the active session on
+# seat0 (the user's desktop, or the login screen), following session
+# switches. Install: copy to /etc/systemd/system/, then
+#   systemctl enable --now quickremote-supervisor
+[Unit]
+Description=QuickRemote host supervisor (desktop and login screen)
+After=systemd-logind.service display-manager.service
+Wants=systemd-logind.service
+
+[Service]
+ExecStart=/usr/bin/qr-host --supervise
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=graphical.target

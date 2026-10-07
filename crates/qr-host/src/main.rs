@@ -17,6 +17,8 @@ mod screencopy;
 mod session;
 mod stream;
 #[cfg(target_os = "linux")]
+mod supervisor;
+#[cfg(target_os = "linux")]
 #[cfg(target_os = "linux")]
 mod uinput;
 #[cfg(target_os = "linux")]
@@ -59,9 +61,10 @@ pub struct Args {
     /// (default ~/.config/quickremote/host).
     #[arg(long)]
     config_dir: Option<PathBuf>,
-    /// What to stream: `test` (a test pattern; `test:<pattern>` picks a
-    /// videotestsrc pattern).
-    #[arg(long, default_value = "test")]
+    /// What to stream: `auto` (this session's desktop: Wayland, else X11,
+    /// else a virtual display), `wayland[:socket]`, `mutter`, `x11:<display>`,
+    /// `vdisplay[:command]`, `d3d11` (Windows), or `test[:<pattern>]`.
+    #[arg(long, default_value = "auto")]
     source: String,
     /// Picture size for test and virtual-display sources.
     #[arg(long, default_value = "1920x1080")]
@@ -99,6 +102,11 @@ pub struct Args {
     /// Print the working encoders and exit.
     #[arg(long)]
     probe: bool,
+    /// System service mode (root): keep a host running in the active
+    /// session (the user's desktop, or the login screen). The other options
+    /// are passed on to it.
+    #[arg(long)]
+    supervise: bool,
     /// Audio to send: `auto` (what the desktop plays), `none`,
     /// `test:<wave>`, `pipewire:<target>`, `pulse[:<device>]`, `default`
     /// (the default input).
@@ -206,6 +214,24 @@ fn x11_size(display: &str) -> Result<(u32, u32)> {
     Ok((s.width_in_pixels as u32, s.height_in_pixels as u32))
 }
 
+/// `auto`: the desktop this host was started in.
+fn resolve_source(s: &str) -> String {
+    if s != "auto" {
+        return s.to_string();
+    }
+    if cfg!(windows) {
+        return "d3d11".into();
+    }
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        return "wayland".into();
+    }
+    if let Ok(d) = std::env::var("DISPLAY") {
+        return format!("x11:{d}");
+    }
+    // No desktop (a server): a virtual one.
+    "vdisplay".into()
+}
+
 fn dirs_home() -> PathBuf {
     std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."))
 }
@@ -219,7 +245,25 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
-    let args = Args::parse();
+    let mut args = Args::parse();
+    #[cfg(target_os = "linux")]
+    if args.supervise {
+        // Everything but --supervise and --source (set per session).
+        let mut forward = Vec::new();
+        let mut it = std::env::args().skip(1);
+        while let Some(a) = it.next() {
+            match a.as_str() {
+                "--supervise" => {}
+                "--source" => {
+                    it.next();
+                }
+                _ if a.starts_with("--source=") => {}
+                _ => forward.push(a),
+            }
+        }
+        return supervisor::run(forward).await;
+    }
+    args.source = resolve_source(&args.source);
     qr_net::init_crypto();
     qr_net::trace::from_env();
     qr_media::init()?;
