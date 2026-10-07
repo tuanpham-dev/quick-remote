@@ -24,7 +24,7 @@ serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 libc.workspace = true
-x11rb = { version = "0.13", features = ["xtest", "randr", "xfixes", "shm", "damage"] }
+x11rb = { version = "0.13", features = ["xtest", "randr", "xfixes", "shm", "damage", "xinerama"] }
 wtransport = { version = "0.7", default-features = false, features = ["ring", "quinn"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 rust-embed = "8"

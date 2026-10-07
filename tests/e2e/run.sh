@@ -14,6 +14,7 @@ phase1)
 	run lan a1_a2
 	[[ -f "$here/a6.sh" ]] && run lan a6
 	run lan a7
+	run lan a15_x11
 	[[ -f "$here/a10_a11.sh" ]] && run wan a10_a11
 	# Virtual display (ENV-BLOCKED without the render group).
 	run lan a16

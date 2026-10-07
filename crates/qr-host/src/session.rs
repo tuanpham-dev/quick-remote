@@ -347,6 +347,14 @@ impl HostCtx {
                 Err(e) => tracing::warn!("listing virtual outputs: {e:#}"),
             }
         }
+        // An X display: its RandR monitors.
+        if let Some(display) = self.args.source.strip_prefix("x11:") {
+            match x11_monitors(display, self.args.fps) {
+                Ok(m) if !m.is_empty() => return m,
+                Ok(_) => {}
+                Err(e) => tracing::warn!("listing the X monitors: {e:#}"),
+            }
+        }
         let (w, h, fps) = self.display_mode(0, 0, 0);
         vec![Monitor {
             id: 0,
@@ -361,8 +369,15 @@ impl HostCtx {
     }
 
     /// Capture source for a monitor of a non-virtual display.
-    pub fn source_for(&self, _mon: &Monitor) -> Source {
-        self.source()
+    pub fn source_for(&self, mon: &Monitor) -> Source {
+        match self.source() {
+            // One monitor of several: its rectangle of the screen.
+            Source::X11 { display, .. } if self.monitors().len() > 1 => Source::X11 {
+                display,
+                rect: Some((mon.x, mon.y, mon.width as u32, mon.height as u32)),
+            },
+            s => s,
+        }
     }
 
     pub fn source(&self) -> Source {
@@ -375,4 +390,60 @@ impl HostCtx {
             other => Source::Test { pattern: other.trim_start_matches("test:").into() },
         }
     }
+}
+
+/// An X display's RandR monitors, or its Xinerama heads.
+fn x11_monitors(display: &str, fps: u32) -> Result<Vec<Monitor>> {
+    use x11rb::connection::Connection;
+    use x11rb::protocol::randr::ConnectionExt as _;
+    use x11rb::protocol::xproto::ConnectionExt as _;
+    let (conn, screen) = x11rb::connect(Some(display))?;
+    let root = conn.setup().roots[screen].root;
+    let reply = conn.randr_get_monitors(root, true)?.reply()?;
+    let mut out = Vec::new();
+    for (i, m) in reply.monitors.iter().enumerate() {
+        let name = conn
+            .get_atom_name(m.name)?
+            .reply()
+            .map(|r| String::from_utf8_lossy(&r.name).into_owned())
+            .unwrap_or_else(|_| format!("monitor-{i}"));
+        out.push(Monitor {
+            id: i as u8,
+            name,
+            width: m.width,
+            height: m.height,
+            refresh_mhz: fps * 1000,
+            x: m.x as i32,
+            y: m.y as i32,
+            primary: m.primary,
+        });
+    }
+    // One RandR monitor but several Xinerama heads (Xinerama setups, nested
+    // servers): the heads are the monitors.
+    if out.len() <= 1 {
+        use x11rb::connection::RequestConnection as _;
+        use x11rb::protocol::xinerama::ConnectionExt as _;
+        if conn.extension_information(x11rb::protocol::xinerama::X11_EXTENSION_NAME)?.is_some()
+            && conn.xinerama_is_active()?.reply()?.state != 0
+        {
+            let heads = conn.xinerama_query_screens()?.reply()?.screen_info;
+            if heads.len() > 1 {
+                return Ok(heads
+                    .iter()
+                    .enumerate()
+                    .map(|(i, h)| Monitor {
+                        id: i as u8,
+                        name: format!("head-{i}"),
+                        width: h.width,
+                        height: h.height,
+                        refresh_mhz: fps * 1000,
+                        x: h.x_org as i32,
+                        y: h.y_org as i32,
+                        primary: i == 0,
+                    })
+                    .collect());
+            }
+        }
+    }
+    Ok(out)
 }
