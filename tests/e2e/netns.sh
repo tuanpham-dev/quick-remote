@@ -32,6 +32,14 @@ shift 2
 declare -A NODE_PID=()
 LINKS=0
 cleanup() {
+	# Everything started in a node's namespace (hosts, Xvfb, …), not just the
+	# shell jobs: nsenter children outlive their job otherwise.
+	for p in "${NODE_PID[@]}"; do
+		ns=$(readlink "/proc/$p/ns/net" 2>/dev/null) || continue
+		for q in /proc/[0-9]*; do
+			[[ "$(readlink "$q/ns/net" 2>/dev/null)" == "$ns" ]] && kill -9 "${q#/proc/}" 2>/dev/null
+		done
+	done
 	for p in "${NODE_PID[@]}"; do kill "$p" 2>/dev/null || true; done
 	jobs -p | xargs -r kill 2>/dev/null || true
 }

@@ -143,13 +143,20 @@ fn play_rumble(gilrs: &mut Gilrs, id: GamepadId, strong: u16, weak: u16, ms: u16
     }
 }
 
-/// `--fake-pad`: pad 0 presses A, sweeps the left stick and releases (tests).
+/// `--fake-pad`: pads 0 and 1 attach; pad 0 (after 400 ms neutral, so a
+/// recorder can attach) presses A and sweeps its left
+/// stick, pad 1 holds B; then pad 1 is unplugged (tests).
 pub fn fake(conn: quinn::Connection, ctl: qr_net::files::Control) {
     ctl(Msg::PadAttach { idx: 0, kind: 1 });
-    for seq in 1..=60u32 {
-        let x = ((seq as f32 / 60.0) * 65535.0 - 32768.0) as i16;
-        let p = PadState { idx: 0, seq, buttons: if seq < 30 { pad::A } else { 0 }, axes: [x, 0, 0, 0, 0, 32767] };
-        let _ = conn.send_datagram(Bytes::from(p.encode()));
+    ctl(Msg::PadAttach { idx: 1, kind: 1 });
+    for seq in 1..=100u32 {
+        let x = ((seq as f32 / 100.0) * 65535.0 - 32768.0) as i16;
+        let p0 = PadState { idx: 0, seq, buttons: if (20..60).contains(&seq) { pad::A } else { 0 }, axes: [x, 0, 0, 0, 0, 32767] };
+        let p1 = PadState { idx: 1, seq, buttons: pad::B, axes: [0; 6] };
+        let _ = conn.send_datagram(Bytes::from(p0.encode()));
+        let _ = conn.send_datagram(Bytes::from(p1.encode()));
         std::thread::sleep(Duration::from_millis(20));
     }
+    std::thread::sleep(Duration::from_millis(1500));
+    ctl(Msg::PadDetach { idx: 1 });
 }

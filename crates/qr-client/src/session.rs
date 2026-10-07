@@ -466,6 +466,7 @@ pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, 
                     continue;
                 }
                 if let Ok(Msg::Rumble { idx, strong, weak, ms }) = &m {
+                    tracing::info!(idx, strong, weak, ms, "rumble from the host");
                     if let Some(tx) = rumble2.lock().expect("lock").as_ref() {
                         let _ = tx.send((*idx, *strong, *weak, *ms));
                     }

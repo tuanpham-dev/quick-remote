@@ -9,6 +9,7 @@
 //! abs <x> <y>
 //! wheel <dx> <dy>
 //! release
+//! pen <x> <y> <pressure> <tilt_x> <tilt_y> <flags>
 //! ```
 //!
 //! Every input event sent is written to the input trace (if open).
@@ -71,6 +72,19 @@ pub async fn run(path: &str, input: &Input) -> Result<()> {
             "abs" => input.abs(0, num(0)? as u16, num(1)? as u16),
             "wheel" => send(input, InputEvent::Wheel { dx: num(0)? as i16, dy: num(1)? as i16 }),
             "release" => send(input, InputEvent::ReleaseAll),
+            // pen <x> <y> <pressure 0-65535> <tilt_x> <tilt_y> <flags>, in stream pixels.
+            "pen" => send(
+                input,
+                InputEvent::Pen {
+                    stream: 0,
+                    x: num(0)? as u32 * 16,
+                    y: num(1)? as u32 * 16,
+                    pressure: num(2)? as u16,
+                    tilt_x: num(3)? as i8,
+                    tilt_y: num(4)? as i8,
+                    flags: num(5)? as u8,
+                },
+            ),
             other => bail!("line {}: unknown command {other}", n + 1),
         }
     }
