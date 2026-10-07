@@ -56,7 +56,15 @@ async fn layout(conn: &zbus::Connection) -> Result<Vec<(String, i32, i32, u32, u
         let Some(spec) = specs.first() else { continue };
         let Some((w, h, hz)) = current(spec) else { continue };
         let s = if *scale > 0.0 { *scale } else { 1.0 };
-        out.push((spec.0.clone(), *x, *y, (w as f64 / s) as u32, (h as f64 / s) as u32, (hz * 1000.0) as u32, *primary));
+        out.push((
+            spec.0.clone(),
+            *x,
+            *y,
+            (w as f64 / s) as u32,
+            (h as f64 / s) as u32,
+            (hz * 1000.0) as u32,
+            *primary,
+        ));
     }
     out.sort_by_key(|m| (!m.6, m.1, m.2));
     Ok(out)
@@ -220,9 +228,11 @@ impl Injector for MutterInput {
     fn abs(&mut self, x: u16, y: u16) -> Result<()> {
         // Desktop coordinates back to the monitor and its stream.
         let (x, y) = (x as i32, y as i32);
-        let Some((m, path)) = self.streams.iter().find(|(m, _)| {
-            x >= m.x && y >= m.y && x < m.x + m.width as i32 && y < m.y + m.height as i32
-        }) else {
+        let Some((m, path)) = self
+            .streams
+            .iter()
+            .find(|(m, _)| x >= m.x && y >= m.y && x < m.x + m.width as i32 && y < m.y + m.height as i32)
+        else {
             return Ok(());
         };
         self.send(Call::Abs(path.clone(), (x - m.x) as f64, (y - m.y) as f64))

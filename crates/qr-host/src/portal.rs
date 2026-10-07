@@ -33,7 +33,9 @@ impl Cast {
 /// session bus. `restore`: a token from an earlier cast (no prompt).
 pub async fn start(bus: Option<&str>, restore: Option<&str>) -> Result<Cast> {
     let conn = match bus {
-        Some(addr) => zbus::connection::Builder::address(addr)?.build().await.context("connecting to the portal bus")?,
+        Some(addr) => {
+            zbus::connection::Builder::address(addr)?.build().await.context("connecting to the portal bus")?
+        }
         None => zbus::Connection::session().await.context("connecting to the session bus")?,
     };
     let proxy = Screencast::with_connection(conn.clone()).await.context("the ScreenCast portal is not available")?;
@@ -51,7 +53,11 @@ pub async fn start(bus: Option<&str>, restore: Option<&str>) -> Result<Cast> {
         .await?
         .response()
         .context("selecting the screen to share was refused")?;
-    let streams = proxy.start(&session, None, StartCastOptions::default()).await?.response().context("screen sharing was refused")?;
+    let streams = proxy
+        .start(&session, None, StartCastOptions::default())
+        .await?
+        .response()
+        .context("screen sharing was refused")?;
     let s = streams.streams().first().context("the portal returned no stream")?;
     let node = s.pipe_wire_node_id();
     let size = s.size();

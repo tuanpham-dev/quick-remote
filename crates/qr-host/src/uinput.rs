@@ -201,13 +201,11 @@ fn spawn_pad(idx: u8, rumble: Arc<Mutex<Vec<(u8, u16, u16)>>>) -> Result<mpsc::S
             for e in events {
                 match e.destructure() {
                     EventSummary::UInput(ue, UInputCode::UI_FF_UPLOAD, _) => {
-                        if let Ok(up) = dev.process_ff_upload(ue) {
-                            if let FFEffectKind::Rumble { strong_magnitude, weak_magnitude } = up.effect().kind {
-                                effects.insert(
-                                    up.effect_id(),
-                                    (strong_magnitude, weak_magnitude, up.effect().replay.length),
-                                );
-                            }
+                        if let Ok(up) = dev.process_ff_upload(ue)
+                            && let FFEffectKind::Rumble { strong_magnitude, weak_magnitude } = up.effect().kind
+                        {
+                            effects
+                                .insert(up.effect_id(), (strong_magnitude, weak_magnitude, up.effect().replay.length));
                         }
                     }
                     EventSummary::UInput(ue, UInputCode::UI_FF_ERASE, _) => {

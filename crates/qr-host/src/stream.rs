@@ -133,6 +133,8 @@ impl Drop for VideoStream {
     }
 }
 
+// One task's whole context; a struct would only rename the arguments.
+#[allow(clippy::too_many_arguments)]
 async fn send_loop(
     stream: u8,
     mut rx: mpsc::Receiver<EncodedFrame>,

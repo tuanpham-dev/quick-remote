@@ -94,7 +94,6 @@ impl Dispatch<ZxdgOutputV1, usize> for State {
     }
 }
 
-
 delegate_noop!(State: ignore wl_seat::WlSeat);
 delegate_noop!(State: ignore wl_output::WlOutput);
 delegate_noop!(State: ZxdgOutputManagerV1);
@@ -115,7 +114,8 @@ fn default_keymap() -> Result<String> {
             bail!("libxkbcommon: no context");
         }
         // No names: the XKB_DEFAULT_* environment, else the system default.
-        let km = (x.xkb_keymap_new_from_names)(ctx, std::ptr::null(), xkb_keymap_compile_flags::XKB_KEYMAP_COMPILE_NO_FLAGS);
+        let km =
+            (x.xkb_keymap_new_from_names)(ctx, std::ptr::null(), xkb_keymap_compile_flags::XKB_KEYMAP_COMPILE_NO_FLAGS);
         (x.xkb_context_unref)(ctx);
         if km.is_null() {
             bail!("compiling the default keymap failed");

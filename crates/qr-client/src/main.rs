@@ -264,11 +264,13 @@ async fn cli(args: Args) -> Result<()> {
     let name = args.name.clone().unwrap_or_else(hostname);
     let id = Identity::load_or_create(&dir, &name)?;
     let keystore = Mutex::new(KeyStore::open(&dir.join("paired.json"))?);
+    // A copy to read while awaiting (the store itself stays locked only briefly).
+    let known = KeyStore::from_peers(keystore.lock().expect("lock").peers.clone());
     if args.list {
-        return list(&keystore.lock().expect("lock"), args.list_secs).await;
+        return list(&known, args.list_secs).await;
     }
     let target = args.connect.clone().ok_or_else(|| anyhow!("give --connect ADDR|ID, or --list"))?;
-    let (target, expect_fp) = resolve(&target, &keystore.lock().expect("lock"), args.rendezvous.as_deref()).await?;
+    let (target, expect_fp) = resolve(&target, &known, args.rendezvous.as_deref()).await?;
     qr_media::init()?;
     let decoders = tokio::task::spawn_blocking(qr_media::probe::decoders).await??;
     anyhow::ensure!(!decoders.is_empty(), "no working video decoder found");

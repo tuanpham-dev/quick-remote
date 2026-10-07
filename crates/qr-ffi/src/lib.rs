@@ -42,7 +42,7 @@ pub extern "system" fn Java_dev_quickremote_Native_init(_env: JNIEnv, _c: JClass
 
 /// Lists LAN hosts for `ms` milliseconds: JSON array.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_quickremote_Native_listHosts(mut env: JNIEnv, _c: JClass, ms: jint) -> jstring {
+pub extern "system" fn Java_dev_quickremote_Native_listHosts(env: JNIEnv, _c: JClass, ms: jint) -> jstring {
     let json = core::list_hosts(ms as u64);
     env.new_string(json).map(|s| s.into_raw()).unwrap_or(std::ptr::null_mut())
 }
@@ -84,7 +84,7 @@ pub extern "system" fn Java_dev_quickremote_Native_connect(
 /// on this device's clock (µs, `System.nanoTime()/1000`).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_quickremote_Native_nextVideo(
-    mut env: JNIEnv,
+    env: JNIEnv,
     _c: JClass,
     h: jlong,
     buf: JByteBuffer,
@@ -110,7 +110,7 @@ pub extern "system" fn Java_dev_quickremote_Native_nextVideo(
 /// Next Opus packet into `buf`; returns its length (0 none, −1 ended).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_quickremote_Native_nextAudio(
-    mut env: JNIEnv,
+    env: JNIEnv,
     _c: JClass,
     h: jlong,
     buf: JByteBuffer,
@@ -142,7 +142,7 @@ pub extern "system" fn Java_dev_quickremote_Native_decoded(
 
 /// JSON event, or null when none is pending.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_quickremote_Native_pollEvent(mut env: JNIEnv, _c: JClass, h: jlong) -> jstring {
+pub extern "system" fn Java_dev_quickremote_Native_pollEvent(env: JNIEnv, _c: JClass, h: jlong) -> jstring {
     let Some(ev) = session(h).and_then(|s| s.poll_event()) else { return std::ptr::null_mut() };
     env.new_string(ev).map(|s| s.into_raw()).unwrap_or(std::ptr::null_mut())
 }
@@ -222,7 +222,7 @@ pub extern "system" fn Java_dev_quickremote_Native_pen(
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_quickremote_Native_pad(
-    mut env: JNIEnv,
+    env: JNIEnv,
     _c: JClass,
     h: jlong,
     idx: jint,

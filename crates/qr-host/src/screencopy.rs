@@ -19,9 +19,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
+use qr_media::encode::DmaFrame;
 use wayland_client::protocol::{wl_buffer, wl_output, wl_registry, wl_shm, wl_shm_pool};
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum, delegate_noop};
-use qr_media::encode::DmaFrame;
 use wayland_protocols::wp::linux_dmabuf::zv1::client::zwp_linux_buffer_params_v1::{self, ZwpLinuxBufferParamsV1};
 use wayland_protocols::wp::linux_dmabuf::zv1::client::zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1;
 use wayland_protocols_wlr::screencopy::v1::client::zwlr_screencopy_frame_v1::{self as frame, ZwlrScreencopyFrameV1};
@@ -80,7 +80,14 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
 }
 
 impl Dispatch<wl_output::WlOutput, usize> for State {
-    fn event(st: &mut Self, _: &wl_output::WlOutput, ev: wl_output::Event, i: &usize, _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        st: &mut Self,
+        _: &wl_output::WlOutput,
+        ev: wl_output::Event,
+        i: &usize,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         if let wl_output::Event::Name { name } = ev {
             st.outputs[*i].1 = name;
         }
@@ -88,7 +95,14 @@ impl Dispatch<wl_output::WlOutput, usize> for State {
 }
 
 impl Dispatch<ZwlrScreencopyFrameV1, ()> for State {
-    fn event(st: &mut Self, f: &ZwlrScreencopyFrameV1, ev: frame::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        st: &mut Self,
+        f: &ZwlrScreencopyFrameV1,
+        ev: frame::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         match ev {
             frame::Event::Buffer { format: WEnum::Value(format), width, height, stride } => {
                 st.shm_buffer = Some((format, width, height, stride));
@@ -160,7 +174,14 @@ impl ShmBuffer {
             if libc::ftruncate(fd.as_raw_fd(), len as libc::off_t) < 0 {
                 bail!("ftruncate: {}", std::io::Error::last_os_error());
             }
-            libc::mmap(std::ptr::null_mut(), len, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED, fd.as_raw_fd(), 0)
+            libc::mmap(
+                std::ptr::null_mut(),
+                len,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                fd.as_raw_fd(),
+                0,
+            )
         };
         if map == libc::MAP_FAILED {
             bail!("mmap: {}", std::io::Error::last_os_error());
@@ -309,7 +330,16 @@ pub fn open(socket: &Path, output: &str, gpu: bool) -> Result<Opened> {
         let (w, h, modifier) = (conv.capture.width, conv.capture.height, crate::gpuconv::I915_Y_TILED);
         tracing::info!(w, h, "zero-copy capture");
         state.reset_frame();
-        return Ok(Opened { queue, state, output: out, target, width: w, height: h, format: Format::DmaNv12(modifier), _conn: conn });
+        return Ok(Opened {
+            queue,
+            state,
+            output: out,
+            target,
+            width: w,
+            height: h,
+            format: Format::DmaNv12(modifier),
+            _conn: conn,
+        });
     }
     let key = state.shm_buffer.context("the compositor offered no shared-memory buffer")?;
     let format = gst_format(key.0).with_context(|| format!("unsupported frame format {:?}", key.0))?;
@@ -358,7 +388,12 @@ impl Opened {
         ScreenCopy { stop, thread: Some(thread) }
     }
 
-    fn capture_loop(mut self, stop: &AtomicBool, keepalive: Duration, on_frame: &mut dyn FnMut(Frame<'_>)) -> Result<()> {
+    fn capture_loop(
+        mut self,
+        stop: &AtomicBool,
+        keepalive: Duration,
+        on_frame: &mut dyn FnMut(Frame<'_>),
+    ) -> Result<()> {
         let qh = self.queue.handle();
         if let Target::Gpu { conv, .. } = &self.target {
             conv.bind()?;
@@ -467,7 +502,14 @@ pub fn monitors(socket: &Path, fps: u32) -> Result<Vec<qr_proto::Monitor>> {
         mgr: Option<ZxdgOutputManagerV1>,
     }
     impl Dispatch<wl_registry::WlRegistry, ()> for St {
-        fn event(st: &mut Self, reg: &wl_registry::WlRegistry, ev: wl_registry::Event, _: &(), _: &Connection, qh: &QueueHandle<Self>) {
+        fn event(
+            st: &mut Self,
+            reg: &wl_registry::WlRegistry,
+            ev: wl_registry::Event,
+            _: &(),
+            _: &Connection,
+            qh: &QueueHandle<Self>,
+        ) {
             if let wl_registry::Event::Global { name, interface, version } = ev {
                 match interface.as_str() {
                     "wl_output" if version >= 4 => {
@@ -481,14 +523,28 @@ pub fn monitors(socket: &Path, fps: u32) -> Result<Vec<qr_proto::Monitor>> {
         }
     }
     impl Dispatch<wl_output::WlOutput, usize> for St {
-        fn event(st: &mut Self, _: &wl_output::WlOutput, ev: wl_output::Event, i: &usize, _: &Connection, _: &QueueHandle<Self>) {
+        fn event(
+            st: &mut Self,
+            _: &wl_output::WlOutput,
+            ev: wl_output::Event,
+            i: &usize,
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
             if let wl_output::Event::Name { name } = ev {
                 st.outputs[*i].1.name = name;
             }
         }
     }
     impl Dispatch<ZxdgOutputV1, usize> for St {
-        fn event(st: &mut Self, _: &ZxdgOutputV1, ev: xdg_output::Event, i: &usize, _: &Connection, _: &QueueHandle<Self>) {
+        fn event(
+            st: &mut Self,
+            _: &ZxdgOutputV1,
+            ev: xdg_output::Event,
+            i: &usize,
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
             let o = &mut st.outputs[*i].1;
             match ev {
                 xdg_output::Event::LogicalPosition { x, y } => (o.x, o.y) = (x, y),
@@ -499,14 +555,17 @@ pub fn monitors(socket: &Path, fps: u32) -> Result<Vec<qr_proto::Monitor>> {
     }
     delegate_noop!(St: ZxdgOutputManagerV1);
 
-    let conn = Connection::from_socket(UnixStream::connect(socket).with_context(|| format!("connecting to {}", socket.display()))?)?;
+    let conn = Connection::from_socket(
+        UnixStream::connect(socket).with_context(|| format!("connecting to {}", socket.display()))?,
+    )?;
     let mut queue = conn.new_event_queue();
     let qh = queue.handle();
     let _registry = conn.display().get_registry(&qh, ());
     let mut st = St::default();
     queue.roundtrip(&mut st)?;
     let mgr = st.mgr.clone().context("the compositor has no xdg-output")?;
-    let xdg: Vec<ZxdgOutputV1> = st.outputs.iter().enumerate().map(|(i, (o, _))| mgr.get_xdg_output(o, &qh, i)).collect();
+    let xdg: Vec<ZxdgOutputV1> =
+        st.outputs.iter().enumerate().map(|(i, (o, _))| mgr.get_xdg_output(o, &qh, i)).collect();
     queue.roundtrip(&mut st)?;
     drop(xdg);
     Ok(st

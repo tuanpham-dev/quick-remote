@@ -353,11 +353,8 @@ impl App {
             }
         };
         let size = window.inner_size();
-        let config = wgpu::SurfaceConfiguration {
-            width: size.width.max(1),
-            height: size.height.max(1),
-            ..gpu.config.clone()
-        };
+        let config =
+            wgpu::SurfaceConfiguration { width: size.width.max(1), height: size.height.max(1), ..gpu.config.clone() };
         surface.configure(&gpu.device, &config);
         let video = VideoRenderer::new(&gpu.device, config.format);
         (s.ctl)(qr_proto::Msg::SelectMonitor { stream: EXTRA_STREAM, monitor });

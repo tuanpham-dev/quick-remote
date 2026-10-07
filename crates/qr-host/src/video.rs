@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use qr_media::encode::{EncodeConfig, Source};
 use qr_media::probe::EncoderInfo;
-use qr_proto::msg::Profile;
 use qr_proto::Msg;
+use qr_proto::msg::Profile;
 
 use crate::HostCtx;
 use crate::ratectl::{Limits, RateCtl};

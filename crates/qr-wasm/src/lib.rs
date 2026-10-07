@@ -120,6 +120,8 @@ impl WebReassembler {
     }
 
     /// The next ready event, oldest first.
+    // `next` is the JavaScript API's name (not an iterator).
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<WebFrame> {
         Some(match self.out.pop_front()? {
             Event::Frame(f) => WebFrame {

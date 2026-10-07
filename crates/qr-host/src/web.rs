@@ -165,10 +165,8 @@ pub async fn run(gw: Arc<Gateway>, listen: SocketAddr) -> Result<()> {
     // hash (`/wt-hash`).
     {
         let (gw, ep) = (gw.clone(), ep.clone());
-        let every = std::env::var("QR_WEB_ROTATE_SECS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .map_or(ROTATE, Duration::from_secs);
+        let every =
+            std::env::var("QR_WEB_ROTATE_SECS").ok().and_then(|s| s.parse().ok()).map_or(ROTATE, Duration::from_secs);
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(every.min(Duration::from_secs(3600))).await;

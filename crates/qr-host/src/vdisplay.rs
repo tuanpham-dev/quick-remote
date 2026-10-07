@@ -140,7 +140,10 @@ context.modules = [
         me.children.push(("pipewire", spawn("pipewire", &mut cmd("pipewire", &env), &log("pipewire"))?));
         wait_for(&rt.join("pipewire-0"), "PipeWire", Duration::from_secs(5))?;
         me.children.push(("wireplumber", spawn("wireplumber", &mut cmd("wireplumber", &env), &log("wireplumber"))?));
-        me.children.push(("pipewire-pulse", spawn("pipewire-pulse", &mut cmd("pipewire-pulse", &env), &log("pipewire-pulse"))?));
+        me.children.push((
+            "pipewire-pulse",
+            spawn("pipewire-pulse", &mut cmd("pipewire-pulse", &env), &log("pipewire-pulse"))?,
+        ));
 
         let mut c = cmd("sway", &env);
         c.args(["-c", &rt.join("sway.conf").display().to_string()]);
@@ -190,7 +193,8 @@ context.modules = [
     /// hardware monitors off they are the only ones anyway).
     fn default_audio(&self) {
         let end = Instant::now() + Duration::from_secs(3);
-        for (key, node) in [("default.configured.audio.sink", "qr-out"), ("default.configured.audio.source", "qr-mic")] {
+        for (key, node) in [("default.configured.audio.sink", "qr-out"), ("default.configured.audio.source", "qr-mic")]
+        {
             loop {
                 let ok = Command::new("pw-metadata")
                     .envs(self.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
@@ -211,7 +215,8 @@ context.modules = [
     /// `pipewiresink fd=` (which take it over).
     pub fn pipewire_fd(&self) -> Result<i32> {
         use std::os::fd::IntoRawFd;
-        let s = std::os::unix::net::UnixStream::connect(self.runtime.join("pipewire-0")).context("connecting to the display's PipeWire")?;
+        let s = std::os::unix::net::UnixStream::connect(self.runtime.join("pipewire-0"))
+            .context("connecting to the display's PipeWire")?;
         Ok(s.into_raw_fd())
     }
 
@@ -248,7 +253,8 @@ context.modules = [
             .map(|m| m.name)
             .find(|n| !before.contains(n))
             .context("sway created no output")?;
-        let x: i32 = self.monitors()?.iter().filter(|m| m.name != name).map(|m| m.x + m.width as i32).max().unwrap_or(0);
+        let x: i32 =
+            self.monitors()?.iter().filter(|m| m.name != name).map(|m| m.x + m.width as i32).max().unwrap_or(0);
         self.swaymsg(&["output", &name, "mode", &format!("{w}x{h}@{refresh}Hz"), "position", &x.to_string(), "0"])?;
         Ok(name)
     }
@@ -285,7 +291,10 @@ context.modules = [
     pub fn exited(&mut self) -> Option<String> {
         for (name, c) in &mut self.children {
             if let Ok(Some(st)) = c.try_wait() {
-                return Some(format!("{name} exited ({st}); see {}", self.runtime.join(format!("{name}.log")).display()));
+                return Some(format!(
+                    "{name} exited ({st}); see {}",
+                    self.runtime.join(format!("{name}.log")).display()
+                ));
             }
         }
         None

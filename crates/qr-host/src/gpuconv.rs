@@ -181,7 +181,8 @@ impl GpuConv {
     /// Sets up the GPU on `node` (a DRM render node) for `w`×`h` captures
     /// in DRM `format`, with `n` NV12 outputs.
     pub fn new(node: &str, w: u32, h: u32, format: u32, n: usize) -> Result<Self> {
-        let file = std::fs::OpenOptions::new().read(true).write(true).open(node).with_context(|| format!("opening {node}"))?;
+        let file =
+            std::fs::OpenOptions::new().read(true).write(true).open(node).with_context(|| format!("opening {node}"))?;
         // SAFETY: a valid fd for the device's lifetime (`_node` keeps it).
         let dev = unsafe { gbm_create_device(file.as_raw_fd()) };
         if dev.is_null() {
@@ -189,9 +190,11 @@ impl GpuConv {
         }
         tracing::debug!("gpuconv: GBM device");
         // SAFETY: loading libEGL.
-        let egl = unsafe { egl::DynamicInstance::<egl::EGL1_5>::load_required() }.map_err(|e| anyhow!("loading libEGL: {e}"))?;
+        let egl = unsafe { egl::DynamicInstance::<egl::EGL1_5>::load_required() }
+            .map_err(|e| anyhow!("loading libEGL: {e}"))?;
         // SAFETY: the GBM device outlives the display (dropped after it).
-        let display = unsafe { egl.get_platform_display(EGL_PLATFORM_GBM_KHR, dev as *mut c_void, &[egl::ATTRIB_NONE]) }?;
+        let display =
+            unsafe { egl.get_platform_display(EGL_PLATFORM_GBM_KHR, dev as *mut c_void, &[egl::ATTRIB_NONE]) }?;
         egl.initialize(display)?;
         tracing::debug!("gpuconv: EGL display");
         let exts = egl.query_string(Some(display), egl::EXTENSIONS)?.to_string_lossy().into_owned();
@@ -208,7 +211,9 @@ impl GpuConv {
         egl.make_current(display, None, None, Some(context))?;
         // SAFETY: loader for the current context.
         let gl = unsafe {
-            glow::Context::from_loader_function(|s| egl.get_proc_address(s).map_or(std::ptr::null(), |f| f as *const c_void))
+            glow::Context::from_loader_function(|s| {
+                egl.get_proc_address(s).map_or(std::ptr::null(), |f| f as *const c_void)
+            })
         };
         let image_target: ImageTargetTexture = {
             let f = egl.get_proc_address("glEGLImageTargetTexture2DOES").context("no glEGLImageTargetTexture2DOES")?;
@@ -257,7 +262,8 @@ impl GpuConv {
         bo.planes.push((bo.planes[0].0.try_clone()?, uv_off, stride));
         tracing::debug!(stride, uv_off, modifier = bo.modifier, "gpuconv: NV12 buffer");
         let uv_stride = stride;
-        let (y_image, y_tex) = import(&self.egl, self.display, &self.gl, self.image_target, &bo, DRM_R8, (w, h), Some(0))?;
+        let (y_image, y_tex) =
+            import(&self.egl, self.display, &self.gl, self.image_target, &bo, DRM_R8, (w, h), Some(0))?;
         let (uv_image, uv_tex) =
             import(&self.egl, self.display, &self.gl, self.image_target, &bo, DRM_GR88, (w / 2, h / 2), Some(1))?;
         let mut fbos = Vec::new();
@@ -266,7 +272,13 @@ impl GpuConv {
             unsafe {
                 let f = self.gl.create_framebuffer().map_err(|e| anyhow!(e))?;
                 self.gl.bind_framebuffer(glow::FRAMEBUFFER, Some(f));
-                self.gl.framebuffer_texture_2d(glow::FRAMEBUFFER, glow::COLOR_ATTACHMENT0, glow::TEXTURE_2D, Some(t), 0);
+                self.gl.framebuffer_texture_2d(
+                    glow::FRAMEBUFFER,
+                    glow::COLOR_ATTACHMENT0,
+                    glow::TEXTURE_2D,
+                    Some(t),
+                    0,
+                );
                 let st = self.gl.check_framebuffer_status(glow::FRAMEBUFFER);
                 if st != glow::FRAMEBUFFER_COMPLETE {
                     bail!("NV12 plane can't be rendered to (framebuffer status {st:#x})");
@@ -376,7 +388,8 @@ fn import(
     (w, h): (u32, u32),
     plane: Option<usize>,
 ) -> Result<(egl::Image, glow::Texture)> {
-    let mut a: Vec<egl::Attrib> = vec![egl::WIDTH as _, w as _, egl::HEIGHT as _, h as _, EGL_LINUX_DRM_FOURCC_EXT, format as _];
+    let mut a: Vec<egl::Attrib> =
+        vec![egl::WIDTH as _, w as _, egl::HEIGHT as _, h as _, EGL_LINUX_DRM_FOURCC_EXT, format as _];
     let planes: Vec<usize> = plane.map_or_else(|| (0..bo.planes.len()).collect(), |p| vec![p]);
     for (i, p) in planes.iter().enumerate() {
         let (fd, offset, stride) = &bo.planes[*p];

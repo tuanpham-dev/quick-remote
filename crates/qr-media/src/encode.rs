@@ -529,10 +529,12 @@ fn va_dmabuf_allocator() -> Option<gstreamer_allocators::DmaBufAllocator> {
         // allocator stay alive for the process.
         unsafe {
             let lib = libloading::Library::new("libgstva-1.0.so.0").ok()?;
-            let new_display: libloading::Symbol<unsafe extern "C" fn(*const std::ffi::c_char) -> *mut std::ffi::c_void> =
-                lib.get(b"gst_va_display_drm_new_from_path\0").ok()?;
-            let new_alloc: libloading::Symbol<unsafe extern "C" fn(*mut std::ffi::c_void) -> *mut gst::ffi::GstAllocator> =
-                lib.get(b"gst_va_dmabuf_allocator_new\0").ok()?;
+            let new_display: libloading::Symbol<
+                unsafe extern "C" fn(*const std::ffi::c_char) -> *mut std::ffi::c_void,
+            > = lib.get(b"gst_va_display_drm_new_from_path\0").ok()?;
+            let new_alloc: libloading::Symbol<
+                unsafe extern "C" fn(*mut std::ffi::c_void) -> *mut gst::ffi::GstAllocator,
+            > = lib.get(b"gst_va_dmabuf_allocator_new\0").ok()?;
             let node = std::env::var("QR_RENDER_NODE").unwrap_or_else(|_| "/dev/dri/renderD128".into());
             let node = std::ffi::CString::new(node).ok()?;
             let display = new_display(node.as_ptr());
@@ -564,10 +566,17 @@ pub struct DmaFrame {
 impl DmaFrame {
     /// Takes ownership of `fd` (`size` bytes; planes at `offsets` with
     /// `strides`).
-    pub fn new(fd: std::os::fd::OwnedFd, size: usize, width: u32, height: u32, offsets: [usize; 2], strides: [i32; 2]) -> Result<Self> {
+    pub fn new(
+        fd: std::os::fd::OwnedFd,
+        size: usize,
+        width: u32,
+        height: u32,
+        offsets: [usize; 2],
+        strides: [i32; 2],
+    ) -> Result<Self> {
         use gstreamer_allocators::prelude::*;
         init()?;
-        let alloc = va_dmabuf_allocator().unwrap_or_else(gstreamer_allocators::DmaBufAllocator::new);
+        let alloc = va_dmabuf_allocator().unwrap_or_default();
         // SAFETY: the allocator takes over the fd.
         let memory = unsafe { alloc.alloc_dmabuf(fd, size) }.map_err(|e| anyhow!("wrapping a DMA-BUF: {e}"))?;
         Ok(Self { memory, width, height, offsets, strides })

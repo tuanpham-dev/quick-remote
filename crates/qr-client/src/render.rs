@@ -212,8 +212,7 @@ impl VideoRenderer {
         }
         let p = self.planes.as_ref().expect("just made");
         let planes = if f.format == PixelFormat::Nv12 { 2 } else { 3 };
-        for i in 0..planes {
-            let (w, h, fmt) = dims[i];
+        for (i, &(w, h, fmt)) in dims.iter().enumerate().take(planes) {
             let bpp = if fmt == wgpu::TextureFormat::Rg8Unorm { 2 } else { 1 };
             let start = f.offsets[i];
             let len = f.strides[i] * (h as usize - 1) + w as usize * bpp;

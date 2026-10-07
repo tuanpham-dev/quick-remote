@@ -170,7 +170,7 @@ mod tests {
     fn plan_fits_mtu_and_blocks() {
         for len in [1, 2, 41, 1187, 1188, 50_000, 300_000, 2_000_000, 12_000_000] {
             let p = plan(len, 1187);
-            assert!(p.shard <= 1186 && p.shard % 2 == 0, "{len}: {p:?}");
+            assert!(p.shard <= 1186 && p.shard.is_multiple_of(2), "{len}: {p:?}");
             assert!(p.data_shards * p.shard >= len);
             assert!(p.blocks <= 255 && p.blocks >= 1);
             assert!(p.k * p.blocks >= p.data_shards);

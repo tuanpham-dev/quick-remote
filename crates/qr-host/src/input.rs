@@ -487,7 +487,11 @@ pub fn open(spec: &str, source: &str, vd_socket: Option<&std::path::Path>) -> Re
                     let (w, h) = xtest::screen_size(display).unwrap_or((1920, 1080));
                     match crate::uinput::Uinput::open(w as i32, h as i32) {
                         Ok(u) => {
-                            return Ok(Box::new(Split { main: Box::new(x), devices: Box::new(u), name: "xtest+uinput" }));
+                            return Ok(Box::new(Split {
+                                main: Box::new(x),
+                                devices: Box::new(u),
+                                name: "xtest+uinput",
+                            }));
                         }
                         Err(e) => tracing::warn!("gamepads and pen are off: {e:#}"),
                     }

@@ -102,7 +102,8 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
         .filter(|_| conn.remote_address().ip().is_loopback())
         .map(|p| p.max_datagram);
     let enc444 = probe::choose_444(&allowed_encoders(&ctx), &decoders);
-    let video = Arc::new(Video::new(ctx.clone(), conn.clone(), enc.clone(), enc444, profile, max_datagram, ctl.clone()));
+    let video =
+        Arc::new(Video::new(ctx.clone(), conn.clone(), enc.clone(), enc444, profile, max_datagram, ctl.clone()));
     video.start(0, 0, mode).await?;
     let _audio = match crate::media::start_audio(&ctx, &conn) {
         Ok(a) => a,
@@ -405,10 +406,9 @@ impl HostCtx {
         }
         match self.source() {
             // One monitor of several: its rectangle of the screen.
-            Source::X11 { display, .. } if self.monitors().len() > 1 => Source::X11 {
-                display,
-                rect: Some((mon.x, mon.y, mon.width as u32, mon.height as u32)),
-            },
+            Source::X11 { display, .. } if self.monitors().len() > 1 => {
+                Source::X11 { display, rect: Some((mon.x, mon.y, mon.width as u32, mon.height as u32)) }
+            }
             s => s,
         }
     }

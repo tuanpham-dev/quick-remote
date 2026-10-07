@@ -63,6 +63,9 @@ pub struct StreamStats {
     pub fps: f32,
 }
 
+/// Where rumble from the host goes: (pad, strong, weak, ms).
+pub type RumbleTx = Arc<Mutex<Option<std::sync::mpsc::Sender<(u8, u16, u16, u16)>>>>;
+
 /// Decoded frames of streams other than 0: (stream, frame).
 pub type ExtraSink = Arc<dyn Fn(u8, DecodedFrame) + Send + Sync>;
 
@@ -140,7 +143,7 @@ pub struct Connected {
     /// Sends a control message from any thread.
     pub ctl: qr_net::files::Control,
     /// Rumble from the host for the pad thread: (pad, strong, weak, ms).
-    pub rumble: Arc<Mutex<Option<std::sync::mpsc::Sender<(u8, u16, u16, u16)>>>>,
+    pub rumble: RumbleTx,
     /// Where extra streams' pictures go (none: they are only counted).
     pub extra_sink: Arc<Mutex<Option<ExtraSink>>>,
 }
@@ -511,7 +514,7 @@ pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, 
         None => None,
     };
 
-    let rumble: Arc<Mutex<Option<std::sync::mpsc::Sender<(u8, u16, u16, u16)>>>> = Arc::default();
+    let rumble: RumbleTx = Arc::default();
     let rumble2 = rumble.clone();
     // Control receive loop.
     {
@@ -553,7 +556,9 @@ pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, 
                         sh.stats.parity_pct = h.parity_pct;
                         sh.host = Some(h);
                     }
-                    Ok(Msg::StreamStarted { stream, width, height, monitor, fps, codec, chroma444, .. }) if stream != 0 => {
+                    Ok(Msg::StreamStarted { stream, width, height, monitor, fps, codec, chroma444, .. })
+                        if stream != 0 =>
+                    {
                         tracing::info!(stream, monitor, width, height, fps, "extra stream started");
                         let mut sh = shared.lock().expect("lock");
                         let st = sh.stats.streams.entry(stream).or_default();
@@ -605,7 +610,7 @@ pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, 
                 tick.tick().await;
                 seq = seq.wrapping_add(1);
                 let mut msgs = Vec::new();
-                if seq % 4 == 0 {
+                if seq.is_multiple_of(4) {
                     msgs.push(Msg::Ping { seq, t_client: now_us() });
                 }
                 {
@@ -643,6 +648,8 @@ pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, 
     })
 }
 
+// One task's whole context; a struct would only rename the arguments.
+#[allow(clippy::too_many_arguments)]
 async fn recv_loop(
     conn: &quinn::Connection,
     shared: &Mutex<Shared>,

@@ -176,7 +176,8 @@ impl Clip {
     /// Reads the current clipboard: PNG if offered, else UTF-8 text.
     fn fetch(&mut self) -> Result<Option<Content>> {
         let targets = self.convert(self.a.targets)?;
-        let atoms: Vec<Atom> = targets.chunks_exact(4).map(|b| u32::from_ne_bytes([b[0], b[1], b[2], b[3]])).collect();
+        let atoms: Vec<Atom> =
+            targets.as_chunks::<4>().0.iter().map(|b| u32::from_ne_bytes([b[0], b[1], b[2], b[3]])).collect();
         if atoms.contains(&self.a.png) {
             return Ok(Some(Content::Png(self.convert(self.a.png)?)));
         }

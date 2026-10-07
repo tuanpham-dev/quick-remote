@@ -2,22 +2,22 @@
 //! with paired clients.
 
 mod clipboard;
+mod gpuconv;
 mod input;
 mod media;
+mod mutter;
 mod outbox;
 mod portal;
 mod ratectl;
+mod screencopy;
 mod session;
 mod stream;
-mod gpuconv;
-mod mutter;
-mod screencopy;
-mod vdisplay;
-mod wlinput;
-mod video;
 #[cfg(target_os = "linux")]
 mod uinput;
+mod vdisplay;
+mod video;
 mod web;
+mod wlinput;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -164,14 +164,15 @@ impl HostCtx {
     /// The mode a stream starts at: a virtual display takes the client's
     /// request (up to 4K120); real desktops keep their own size.
     pub fn display_mode(&self, w: u16, h: u16, refresh: u16) -> (u32, u32, u32) {
-        if self.mutter.is_some() || self.wl_socket.is_some() {
-            if let Some(m) = self.monitors().into_iter().next() {
-                return (m.width as u32, m.height as u32, self.args.fps);
-            }
+        if (self.mutter.is_some() || self.wl_socket.is_some())
+            && let Some(m) = self.monitors().into_iter().next()
+        {
+            return (m.width as u32, m.height as u32, self.args.fps);
         }
         if self.vd.is_some() {
             let (dw, dh) = self.args.size();
-            let (w, h) = if w >= 320 && h >= 200 { (w.min(3840) as u32 & !1, h.min(2160) as u32 & !1) } else { (dw, dh) };
+            let (w, h) =
+                if w >= 320 && h >= 200 { (w.min(3840) as u32 & !1, h.min(2160) as u32 & !1) } else { (dw, dh) };
             let fps = if refresh > 0 { (refresh as u32).min(120) } else { self.args.fps };
             return (w, h, fps);
         }
@@ -352,7 +353,16 @@ async fn main() -> Result<()> {
             }
         });
     }
-    let ctx = Arc::new(HostCtx { args, encoders, input: input::Input::new(injector), relays, web_peers, vd, mutter, wl_socket });
+    let ctx = Arc::new(HostCtx {
+        args,
+        encoders,
+        input: input::Input::new(injector),
+        relays,
+        web_peers,
+        vd,
+        mutter,
+        wl_socket,
+    });
     let active: Arc<tokio::sync::Mutex<Option<Active>>> = Arc::default();
     while let Some(incoming) = ep.accept().await {
         let (ctx, id, keystore, pin, limiter, active, name) =

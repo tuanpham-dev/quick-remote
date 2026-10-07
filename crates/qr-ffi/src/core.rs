@@ -457,7 +457,7 @@ async fn start(
             loop {
                 tick.tick().await;
                 seq = seq.wrapping_add(1);
-                if seq % 4 == 0 {
+                if seq.is_multiple_of(4) {
                     h.control(Msg::Ping { seq, t_client: now_us() });
                 }
                 let mut fb = std::mem::take(&mut *h.fb.lock().expect("lock"));

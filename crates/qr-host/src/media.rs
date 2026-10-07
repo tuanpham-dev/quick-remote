@@ -58,7 +58,10 @@ fn mic_sink(ctx: &HostCtx) -> Result<Option<AudioSink>> {
         ("none", _) => None,
         // The virtual display's microphone, for apps there.
         ("auto", _) => match &ctx.vd {
-            Some(vd) => Some(AudioSink::PipeWire { target: "qr-mic-in".into(), fd: Some(vd.lock().expect("lock").pipewire_fd()?) }),
+            Some(vd) => Some(AudioSink::PipeWire {
+                target: "qr-mic-in".into(),
+                fd: Some(vd.lock().expect("lock").pipewire_fd()?),
+            }),
             None => None,
         },
         ("file", p) => Some(AudioSink::File { path: p.into() }),
