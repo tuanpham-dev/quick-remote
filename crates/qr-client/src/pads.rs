@@ -151,7 +151,12 @@ pub fn fake(conn: quinn::Connection, ctl: qr_net::files::Control) {
     ctl(Msg::PadAttach { idx: 1, kind: 1 });
     for seq in 1..=100u32 {
         let x = ((seq as f32 / 100.0) * 65535.0 - 32768.0) as i16;
-        let p0 = PadState { idx: 0, seq, buttons: if (20..60).contains(&seq) { pad::A } else { 0 }, axes: [x, 0, 0, 0, 0, 32767] };
+        let p0 = PadState {
+            idx: 0,
+            seq,
+            buttons: if (20..60).contains(&seq) { pad::A } else { 0 },
+            axes: [x, 0, 0, 0, 0, 32767],
+        };
         let p1 = PadState { idx: 1, seq, buttons: pad::B, axes: [0; 6] };
         let _ = conn.send_datagram(Bytes::from(p0.encode()));
         let _ = conn.send_datagram(Bytes::from(p1.encode()));

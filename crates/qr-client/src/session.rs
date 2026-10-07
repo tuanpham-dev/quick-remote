@@ -647,6 +647,9 @@ async fn recv_loop(
 
 impl Shared {
     fn record(&mut self, frame: u32, t: &FrameTimes, decoded: i64, decode_us: i64) {
+        // The slowest decode in the feedback window tells the host whether
+        // this client keeps up.
+        self.fb.decode_us = self.fb.decode_us.max(decode_us.max(0) as u32);
         let w = &mut self.win;
         w.frames += 1;
         if !self.clock.ready() {

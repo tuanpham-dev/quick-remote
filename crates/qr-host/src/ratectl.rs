@@ -54,6 +54,8 @@ pub struct RateCtl {
     hold_increase_until: Option<Instant>,
     base_delay: Option<(i32, Instant)>,
     last_change: Instant,
+    /// The client can't decode this fast: frame-rate ceiling until when.
+    decode_cap: Option<(u32, Instant)>,
 }
 
 pub const FPS_STEPS: [u32; 7] = [240, 144, 120, 60, 30, 15, 5];
@@ -75,6 +77,7 @@ impl RateCtl {
             hold_increase_until: None,
             base_delay: None,
             last_change: now,
+            decode_cap: None,
         };
         r.fit_fps();
         r
@@ -132,6 +135,17 @@ impl RateCtl {
                 }
             }
         }
+        // A client whose decoder falls behind (more than two frame times per
+        // frame) builds a backlog of latency; step the frame rate down for
+        // 3 s at a time until it keeps up.
+        let frame_us = 1_000_000 / self.fps.max(1);
+        if fb.decode_us > 2 * frame_us {
+            let below = FPS_STEPS.iter().copied().find(|f| *f < self.fps).unwrap_or(5);
+            let cap = self.decode_cap.map_or(below, |(c, _)| c.min(below));
+            self.decode_cap = Some((cap, now + Duration::from_secs(3)));
+        } else if self.decode_cap.is_some_and(|(_, until)| now >= until) {
+            self.decode_cap = None;
+        }
         // Parity follows loss: twice the observed loss plus 5%.
         let (lo, hi) = if self.profile == Profile::Lan { (0.10, 0.25) } else { (0.20, 0.50) };
         self.parity = (self.loss_ewma * 2.0 + 0.05).clamp(lo, hi);
@@ -157,8 +171,9 @@ impl RateCtl {
     fn fit_fps(&mut self) {
         let floor = self.limits.frame_floor_kbit();
         let per_frame = |fps: u32| self.target_kbps as f64 / fps as f64;
-        let steps: Vec<u32> = FPS_STEPS.iter().copied().filter(|f| *f <= self.limits.max_fps).collect();
-        let mut fps = self.fps.min(self.limits.max_fps);
+        let ceiling = self.decode_cap.map_or(self.limits.max_fps, |(c, _)| c.min(self.limits.max_fps));
+        let steps: Vec<u32> = FPS_STEPS.iter().copied().filter(|f| *f <= ceiling).collect();
+        let mut fps = self.fps.min(ceiling);
         // Down while starved.
         while per_frame(fps) < floor {
             match steps.iter().find(|f| **f < fps) {
@@ -249,6 +264,21 @@ mod tests {
         }
         assert!(r.target_kbps <= 1_100, "target {}", r.target_kbps);
         assert!(r.fps <= 15, "fps {}", r.fps);
+    }
+
+    #[test]
+    fn slow_decoder_lowers_fps_then_recovers() {
+        let t0 = Instant::now();
+        let mut r = RateCtl::new(Profile::Lan, limits(), t0);
+        let mut f = fb(190_000, 0, 0, (0, 0, 0));
+        f.decode_us = 80_000; // 80 ms per frame at 60 fps
+        r.on_feedback(&f, t0);
+        assert_eq!(r.fps, 30);
+        r.on_feedback(&f, t0 + Duration::from_millis(50));
+        assert_eq!(r.fps, 15, "still behind: another step down");
+        f.decode_us = 3_000;
+        r.on_feedback(&f, t0 + Duration::from_secs(4));
+        assert_eq!(r.fps, 60, "back to full rate once the cap expires");
     }
 
     #[test]

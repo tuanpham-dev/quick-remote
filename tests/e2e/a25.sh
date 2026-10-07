@@ -6,10 +6,10 @@ mkdir -p "$LOGDIR/out" "$LOGDIR/in" "$LOGDIR/recv"
 head -c "${SIZE_MB}M" /dev/urandom >"$LOGDIR/up.bin"
 head -c "${SIZE_MB}M" /dev/urandom >"$LOGDIR/down.bin"
 head -c 512M /dev/urandom >"$LOGDIR/up2.bin"
-start_host host fhost --pin 424242 --encoder x264enc --source test:smpte --size 1920x1080 --fps 60 --audio none \
+start_host host fhost --pin 424242 --encoder "${A25_ENCODER:-x264enc}" --source test:smpte --size 1920x1080 --fps 60 --audio none \
 	--files-dir "$LOGDIR/in" --outbox "$LOGDIR/out"
 cp "$LOGDIR/down.bin" "$LOGDIR/out/"
-client client cli --connect "$IP_host:9450" --pin 424242 --headless --decoder openh264dec --audio-out none \
+client client cli --connect "$IP_host:9450" --pin 424242 --headless --decoder "${A25_DECODER:-openh264dec}" --audio-out none \
 	--duration "${A25_SECS:-75}" --send-file "$LOGDIR/up.bin" --recv-dir "$LOGDIR/recv" \
 	--stats-json "$LOGDIR/a25.json" >"$LOGDIR/a25-client.txt" 2>&1
 for n in host client; do echo "$n $(on $n nstat -az UdpRcvbufErrors UdpSndbufErrors 2>/dev/null | tail -2 | awk '{print $1"="$2}' | tr '\n' ' ')"; done | tee "$LOGDIR/udp-errors.txt"
