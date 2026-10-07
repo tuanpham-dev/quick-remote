@@ -32,6 +32,10 @@ pub struct Video {
     ctx: Arc<HostCtx>,
     conn: quinn::Connection,
     pub encoder: EncoderInfo,
+    /// For sharp-text mode: a 4:4:4 encoder the client can decode.
+    encoder444: Option<EncoderInfo>,
+    /// Streams run in 4:4:4 (sharp text with `encoder444`).
+    chroma444: AtomicBool,
     pub profile: Profile,
     max_datagram: Option<usize>,
     ctl: qr_net::files::Control,
@@ -52,6 +56,7 @@ impl Video {
         ctx: Arc<HostCtx>,
         conn: quinn::Connection,
         encoder: EncoderInfo,
+        encoder444: Option<EncoderInfo>,
         profile: Profile,
         max_datagram: Option<usize>,
         ctl: qr_net::files::Control,
@@ -60,6 +65,8 @@ impl Video {
             ctx,
             conn,
             encoder,
+            encoder444,
+            chroma444: AtomicBool::new(false),
             profile,
             max_datagram,
             ctl,
@@ -81,10 +88,23 @@ impl Video {
         self.streams.lock().expect("lock").values().map(|c| c.stream.clone()).collect()
     }
 
-    pub fn set_sharp(&self, on: bool) {
+    /// Sharp-text mode: a still-screen refresh at high quality, and 4:4:4
+    /// chroma when both sides have a 4:4:4 codec (the streams restart).
+    pub async fn set_sharp(&self, on: bool) {
         self.sharp.store(on, Ordering::Relaxed);
         for s in self.all() {
             s.sharp.store(on, Ordering::Relaxed);
+        }
+        let want444 = on && self.encoder444.is_some();
+        if self.chroma444.swap(want444, Ordering::Relaxed) == want444 {
+            return;
+        }
+        let running: Vec<(u8, u8, (u32, u32, u32))> =
+            self.streams.lock().expect("lock").iter().map(|(id, c)| (*id, c.monitor, c.mode)).collect();
+        for (id, monitor, mode) in running {
+            if let Err(e) = self.start(id, monitor, mode).await {
+                tracing::warn!("restarting stream {id} for 4:4:4={want444}: {e:#}");
+            }
         }
     }
 
@@ -112,7 +132,8 @@ impl Video {
                 vd.lock().expect("lock").set_mode(&mon.name, w, h, fps)?;
             }
             let name = mon.name.clone();
-            let o = tokio::task::spawn_blocking(move || crate::screencopy::open(&socket, &name))
+            let gpu = !self.chroma444.load(Ordering::Relaxed);
+            let o = tokio::task::spawn_blocking(move || crate::screencopy::open(&socket, &name, gpu))
                 .await?
                 .context("capturing the Wayland output")?;
             (w, h) = (o.width, o.height);
@@ -131,14 +152,25 @@ impl Video {
         if self.ctx.args.bitrate > 0 {
             rate.target_kbps = self.ctx.args.bitrate;
         }
+        let chroma444 = self.chroma444.load(Ordering::Relaxed);
+        let encoder = match (&self.encoder444, chroma444) {
+            (Some(e), true) => e.clone(),
+            _ => self.encoder.clone(),
+        };
+        // A 4:4:4 encoder takes system memory: a GPU-converted (NV12)
+        // capture can't feed it.
+        let source = match source {
+            Source::DmaNv12 { .. } if chroma444 => bail!("4:4:4 needs the shared-memory capture"),
+            s => s,
+        };
         let cfg = EncodeConfig {
-            encoder: self.encoder.clone(),
+            encoder: encoder.clone(),
             source,
             width: w,
             height: h,
             fps,
             bitrate_kbps: rate.target_kbps,
-            chroma444: false,
+            chroma444,
         };
         drop(self.streams.lock().expect("lock").remove(&id));
         let next = self.next_frame.lock().expect("lock").entry(id).or_default().clone();
@@ -161,12 +193,12 @@ impl Video {
             .lock()
             .expect("lock")
             .insert(id, Current { stream, monitor: mon.id, mode: (w, h, fps), _capture: capture });
-        tracing::info!(stream = id, monitor = %mon.name, w, h, fps, "stream started");
+        tracing::info!(stream = id, monitor = %mon.name, w, h, fps, encoder = encoder.element, chroma444, "stream started");
         (self.ctl)(Msg::StreamStarted {
             stream: id,
             monitor: mon.id,
-            codec: self.encoder.codec as u8,
-            chroma444: false,
+            codec: encoder.codec as u8,
+            chroma444,
             width: w as u16,
             height: h as u16,
             fps: fps as u16,

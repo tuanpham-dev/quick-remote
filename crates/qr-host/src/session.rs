@@ -101,7 +101,8 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
         .get(&conn.remote_address().port())
         .filter(|_| conn.remote_address().ip().is_loopback())
         .map(|p| p.max_datagram);
-    let video = Arc::new(Video::new(ctx.clone(), conn.clone(), enc.clone(), profile, max_datagram, ctl.clone()));
+    let enc444 = probe::choose_444(&allowed_encoders(&ctx), &decoders);
+    let video = Arc::new(Video::new(ctx.clone(), conn.clone(), enc.clone(), enc444, profile, max_datagram, ctl.clone()));
     video.start(0, 0, mode).await?;
     let _audio = match crate::media::start_audio(&ctx, &conn) {
         Ok(a) => a,
@@ -252,7 +253,7 @@ async fn control_loop(
             }
             Msg::SetMode { modes } => {
                 let sharp = modes & qr_proto::msg::mode::SHARP_TEXT != 0;
-                video.set_sharp(sharp);
+                video.set_sharp(sharp).await;
                 tracing::info!(sharp, "sharp-text mode");
             }
             // Switches a stream to another monitor, or opens one more stream
@@ -324,6 +325,16 @@ async fn uni_streams(
 
 async fn send(tx: &AsyncMutex<FramedSend>, m: &Msg) -> Result<()> {
     tx.lock().await.send(m).await
+}
+
+/// The encoders `--encoder` / `--codec` allow.
+fn allowed_encoders(ctx: &HostCtx) -> Vec<probe::EncoderInfo> {
+    ctx.encoders
+        .iter()
+        .filter(|e| ctx.args.encoder == "auto" || ctx.args.encoder == e.element || e.chroma444)
+        .filter(|e| ctx.args.codec == "auto" || ctx.args.codec == e.codec.name())
+        .cloned()
+        .collect()
 }
 
 fn choose_encoder(ctx: &HostCtx, decoders: &[CodecCap]) -> Option<(probe::EncoderInfo, CodecCap)> {

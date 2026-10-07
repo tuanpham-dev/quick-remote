@@ -285,6 +285,7 @@ pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, 
 
     // Wait for the session to start and the first stream to be announced.
     let mut codec = None;
+    let mut chroma444 = false;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while codec.is_none() {
         let m = tokio::time::timeout_at(deadline, rx.recv()).await.context("waiting for the stream")??;
@@ -309,7 +310,8 @@ pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, 
                 }
                 .into();
             }
-            Msg::StreamStarted { codec: c, width, height, monitor, .. } => {
+            Msg::StreamStarted { codec: c, width, height, monitor, chroma444: c444, .. } => {
+                chroma444 = c444;
                 let mut sh = shared.lock().expect("lock");
                 sh.stats.monitor = monitor;
                 sh.stats.width = width as u32;
@@ -321,13 +323,6 @@ pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, 
         }
     }
     let codec = codec.expect("loop exits with a codec");
-    let dec_el = o
-        .decoder_override
-        .clone()
-        .or_else(|| o.decoders.iter().find(|d| d.codec == codec).map(|d| d.element.to_string()))
-        .ok_or_else(|| anyhow!("no decoder for {}", codec.name()))?;
-    shared.lock().expect("lock").stats.codec = codec.name().into();
-    shared.lock().expect("lock").stats.decoder = dec_el.clone();
 
     let (end_tx, ended) = tokio::sync::watch::channel(None::<String>);
     let mut tasks = Vec::new();
@@ -366,31 +361,42 @@ pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, 
     };
 
     // Decoder: completed frames in, pictures out to the sink with timings.
-    let sh2 = shared.clone();
-    let decoder = Arc::new(Decoder::start(codec, &dec_el, move |f| {
-        let done = now_us() as i64;
-        let times = {
-            let mut sh = sh2.lock().expect("lock");
-            let Some(t) = sh.pending.remove(&f.frame_id) else {
-                return;
-            };
-            sh.record(f.frame_id, &t, done, f.decode_us as i64, f.work_us);
-            t
-        };
-        sink(f, times);
-    })?);
+    // Rebuilt when a restarted stream changes codec or chroma (4:4:4).
+    let make_main = {
+        let (decoders, ovr, shared) = (o.decoders.clone(), o.decoder_override.clone(), shared.clone());
+        move |codec: Codec, chroma444: bool| -> Result<Decoder> {
+            let el = pick_decoder(&decoders, ovr.as_deref(), codec, chroma444)?;
+            {
+                let mut sh = shared.lock().expect("lock");
+                sh.stats.codec = codec.name().into();
+                sh.stats.decoder = el.clone();
+            }
+            let (sh2, sink) = (shared.clone(), sink.clone());
+            Decoder::start(codec, &el, move |f| {
+                let done = now_us() as i64;
+                let times = {
+                    let mut sh = sh2.lock().expect("lock");
+                    let Some(t) = sh.pending.remove(&f.frame_id) else {
+                        return;
+                    };
+                    sh.record(f.frame_id, &t, done, f.decode_us as i64, f.work_us);
+                    t
+                };
+                sink(f, times);
+            })
+        }
+    };
+    let decoder = make_main(codec, chroma444)?;
 
     // Extra streams (second windows) get their own decoders.
     let extra_sink: Arc<Mutex<Option<ExtraSink>>> = Arc::default();
-    let (extra_tx, extra_rx) = tokio::sync::mpsc::unbounded_channel::<(u8, Option<Codec>)>();
+    // (stream, (codec, 4:4:4)) as streams start; `None` when one stops.
+    let (extra_tx, extra_rx) = tokio::sync::mpsc::unbounded_channel::<(u8, Option<(Codec, bool)>)>();
     let make_extra = {
         let (decoders, ovr, sink, shared) =
             (o.decoders.clone(), o.decoder_override.clone(), extra_sink.clone(), shared.clone());
-        move |stream: u8, codec: Codec| -> Result<Decoder> {
-            let el = ovr
-                .clone()
-                .or_else(|| decoders.iter().find(|d| d.codec == codec).map(|d| d.element.to_string()))
-                .ok_or_else(|| anyhow!("no decoder for {}", codec.name()))?;
+        move |stream: u8, codec: Codec, chroma444: bool| -> Result<Decoder> {
+            let el = pick_decoder(&decoders, ovr.as_deref(), codec, chroma444)?;
             let (sink, shared) = (sink.clone(), shared.clone());
             Decoder::start(codec, &el, move |f| {
                 *shared.lock().expect("lock").extra_frames.entry(stream).or_default() += 1;
@@ -433,11 +439,12 @@ pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, 
 
     // Media receive loop.
     {
-        let (conn, shared, control, decoder, end_tx, player) =
-            (conn.clone(), shared.clone(), control.clone(), decoder.clone(), end_tx.clone(), player.clone());
+        let (conn, shared, control, end_tx, player) =
+            (conn.clone(), shared.clone(), control.clone(), end_tx.clone(), player.clone());
         tasks.push(tokio::spawn(async move {
             let _mic = mic;
-            let r = recv_loop(&conn, &shared, &control, &decoder, player.as_deref(), extra_rx, make_extra).await;
+            let main = (decoder, (codec, chroma444));
+            let r = recv_loop(&conn, &shared, &control, main, make_main, player.as_deref(), extra_rx, make_extra).await;
             if let Some(p) = player {
                 p.finish();
             }
@@ -546,13 +553,13 @@ pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, 
                         sh.stats.parity_pct = h.parity_pct;
                         sh.host = Some(h);
                     }
-                    Ok(Msg::StreamStarted { stream, width, height, monitor, fps, codec, .. }) if stream != 0 => {
+                    Ok(Msg::StreamStarted { stream, width, height, monitor, fps, codec, chroma444, .. }) if stream != 0 => {
                         tracing::info!(stream, monitor, width, height, fps, "extra stream started");
                         let mut sh = shared.lock().expect("lock");
                         let st = sh.stats.streams.entry(stream).or_default();
                         (st.monitor, st.width, st.height) = (monitor, width as u32, height as u32);
                         drop(sh);
-                        let _ = extra_tx.send((stream, Codec::from_u8(codec).ok()));
+                        let _ = extra_tx.send((stream, Codec::from_u8(codec).ok().map(|c| (c, chroma444))));
                     }
                     Ok(Msg::MonitorList { monitors }) => {
                         let names: Vec<String> =
@@ -564,7 +571,8 @@ pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, 
                         shared.lock().expect("lock").stats.streams.remove(&stream);
                         let _ = extra_tx.send((stream, None));
                     }
-                    Ok(Msg::StreamStarted { width, height, monitor, fps, .. }) => {
+                    Ok(Msg::StreamStarted { width, height, monitor, fps, codec, chroma444, .. }) => {
+                        let _ = extra_tx.send((0, Codec::from_u8(codec).ok().map(|c| (c, chroma444))));
                         // A restarted stream (monitor switch, resize): it
                         // opens with a keyframe that carries the new size.
                         tracing::info!(monitor, width, height, fps, "stream restarted");
@@ -639,18 +647,19 @@ async fn recv_loop(
     conn: &quinn::Connection,
     shared: &Mutex<Shared>,
     control: &AsyncMutex<FramedSend>,
-    decoder: &Decoder,
+    (mut decoder, mut kind): (Decoder, (Codec, bool)),
+    make_main: impl Fn(Codec, bool) -> Result<Decoder>,
     player: Option<&AudioPlayer>,
-    mut extra_rx: tokio::sync::mpsc::UnboundedReceiver<(u8, Option<Codec>)>,
-    make_extra: impl Fn(u8, Codec) -> Result<Decoder>,
+    mut extra_rx: tokio::sync::mpsc::UnboundedReceiver<(u8, Option<(Codec, bool)>)>,
+    make_extra: impl Fn(u8, Codec, bool) -> Result<Decoder>,
 ) -> Result<()> {
     let frame_ms: f64 = 1000.0 / 60.0;
     let deadline = Duration::from_millis((2.0 * frame_ms).max(20.0) as u64);
     let mut reasm = Reassembler::new(0, deadline);
     // After a loss, deltas are useless until the next keyframe.
     let mut need_key = false;
-    // Streams besides 0: (reassembler, decoder, need_key).
-    let mut extras: std::collections::HashMap<u8, (Reassembler, Decoder, bool)> = Default::default();
+    // Streams besides 0: (reassembler, decoder, need_key, codec and chroma).
+    let mut extras: std::collections::HashMap<u8, (Reassembler, Decoder, bool, (Codec, bool))> = Default::default();
     let mut tick = tokio::time::interval(Duration::from_millis(5));
     loop {
         let events = tokio::select! {
@@ -658,7 +667,7 @@ async fn recv_loop(
                 let d: Bytes = d?;
                 match d.first() {
                     Some(&kind::VIDEO) if d.get(1).is_some_and(|&s| s != 0) => {
-                        if let Some((r, dec, nk)) = extras.get_mut(&d[1]) {
+                        if let Some((r, dec, nk, _)) = extras.get_mut(&d[1]) {
                             let ev = r.push(&d, qr_net::clock::base().elapsed()).unwrap_or_default();
                             extra_events(d[1], ev, dec, nk, control).await?;
                         }
@@ -680,13 +689,22 @@ async fn recv_loop(
                     _ => Vec::new(),
                 }
             }
-            Some((id, codec)) = extra_rx.recv() => {
-                // A restart keeps the decoder (the codec doesn't change); the
-                // frame numbering carries on.
-                match codec {
-                    Some(c) if !extras.contains_key(&id) => match make_extra(id, c) {
+            Some((id, started)) = extra_rx.recv() => {
+                // A restart keeps the decoder unless the codec or chroma
+                // changed; the frame numbering carries on either way.
+                match started {
+                    Some(k) if id == 0 => {
+                        if k != kind {
+                            tracing::info!(codec = k.0.name(), chroma444 = k.1, "new decoder for the restarted stream");
+                            decoder = make_main(k.0, k.1)?;
+                            kind = k;
+                            need_key = true;
+                        }
+                    }
+                    Some(k) if extras.get(&id).is_none_or(|e| e.3 != k) => match make_extra(id, k.0, k.1) {
                         Ok(dec) => {
-                            extras.insert(id, (Reassembler::new(id, deadline), dec, false));
+                            let reasm = extras.remove(&id).map_or_else(|| Reassembler::new(id, deadline), |e| e.0);
+                            extras.insert(id, (reasm, dec, true, k));
                         }
                         Err(e) => tracing::warn!("stream {id}: {e:#}"),
                     },
@@ -699,7 +717,7 @@ async fn recv_loop(
             }
             _ = tick.tick() => {
                 let now = qr_net::clock::base().elapsed();
-                for (id, (r, dec, nk)) in extras.iter_mut() {
+                for (id, (r, dec, nk, _)) in extras.iter_mut() {
                     let ev = r.poll(now);
                     extra_events(*id, ev, dec, nk, control).await?;
                     let st = r.take_stats();
@@ -926,4 +944,21 @@ pub async fn bye(c: &Connected) {
     }
     c.conn.close(0u32.into(), b"bye");
     let _ = tokio::time::timeout(Duration::from_secs(1), c.endpoint.wait_idle()).await;
+}
+
+/// The decoder element for `codec`: the override if given; for 4:4:4, one
+/// that decodes it (often software: hardware decoders rarely do).
+fn pick_decoder(decoders: &[DecoderInfo], ovr: Option<&str>, codec: Codec, chroma444: bool) -> Result<String> {
+    if let Some(o) = ovr
+        && !chroma444
+    {
+        return Ok(o.to_string());
+    }
+    decoders
+        .iter()
+        .filter(|d| d.codec == codec)
+        .find(|d| d.chroma444 || !chroma444)
+        .or_else(|| decoders.iter().find(|d| d.codec == codec))
+        .map(|d| d.element.to_string())
+        .ok_or_else(|| anyhow!("no decoder for {}", codec.name()))
 }

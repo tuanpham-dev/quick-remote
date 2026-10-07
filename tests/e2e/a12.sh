@@ -17,5 +17,10 @@ on=$(run sharp --sharp)
 echo "SSIM without sharp-text: $off, with: $on"
 check A12 "still 9-px text with sharp-text on reaches SSIM ≥ 0.98 (got $on; $off without)" \
 	python3 -c "import sys; sys.exit(0 if $on >= 0.98 else 1)"
+# Both sides have a 4:4:4 codec here (x264, libav): with the mode on, the
+# stream restarts in 4:4:4 and the decoded chroma planes are full size.
+fmt=$(python3 -c "import json; print(json.load(open('$LOGDIR/sharp.json'))['format'])")
+check A12b "with sharp-text on the stream switches to 4:4:4: the decoded frame is $fmt (full-size chroma)" \
+	bash -c "[[ '$fmt' == Y444 ]]"
 # Note: a still page also converges without the mode (x264 refines it over
 # successive frames); the refresh matters right after motion stops.

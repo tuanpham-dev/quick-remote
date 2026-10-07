@@ -209,6 +209,13 @@ pub fn decoder_caps(decs: &[DecoderInfo]) -> Vec<CodecCap> {
     caps
 }
 
+/// The encoder for 4:4:4 (sharp text): one that encodes 4:4:4 in a codec
+/// the client decodes in 4:4:4, hardware first, else in `encs` order.
+pub fn choose_444(encs: &[EncoderInfo], client: &[CodecCap]) -> Option<EncoderInfo> {
+    let ok = |e: &&EncoderInfo| e.chroma444 && client.iter().any(|c| c.codec == e.codec && c.chroma444);
+    encs.iter().filter(ok).find(|e| e.hw).or_else(|| encs.iter().find(ok)).cloned()
+}
+
 /// Picks the encoder for a client: among codecs both sides handle, prefer
 /// hardware decode on the client, then hardware encode on the host, then
 /// (for hardware encoders) the more efficient codec. Software encoders
@@ -256,5 +263,20 @@ mod tests {
         assert_eq!(e.element, "vah264lpenc");
         // No common codec.
         assert!(choose(&encs, &[cap(Codec::Av1, true)]).is_none());
+    }
+
+    #[test]
+    fn chooses_a_444_encoder_the_client_decodes() {
+        let mut x264 = enc("x264enc", Codec::H264, false);
+        x264.chroma444 = true;
+        let mut x265 = enc("x265enc", Codec::H265, false);
+        x265.chroma444 = true;
+        let va = enc("vah264lpenc", Codec::H264, true);
+        let mut h264 = cap(Codec::H264, true);
+        h264.chroma444 = true;
+        let encs = [va.clone(), x265.clone(), x264.clone()];
+        assert_eq!(choose_444(&encs, &[h264.clone()]).map(|e| e.element), Some("x264enc"));
+        assert!(choose_444(&encs, &[cap(Codec::H264, true)]).is_none(), "the client can't decode 4:4:4");
+        assert!(choose_444(&[va], &[h264]).is_none(), "no 4:4:4 encoder");
     }
 }

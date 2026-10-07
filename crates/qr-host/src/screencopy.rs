@@ -259,8 +259,9 @@ fn gpu_target(state: &State, qh: &QueueHandle<State>, offer: (u32, u32, u32)) ->
 }
 
 /// Connects to the compositor at `socket` and prepares to capture
-/// `output` (learning its frame size and format).
-pub fn open(socket: &Path, output: &str) -> Result<Opened> {
+/// `output` (learning its frame size and format). `gpu`: zero-copy NV12
+/// frames are acceptable (not for 4:4:4 encoding).
+pub fn open(socket: &Path, output: &str, gpu: bool) -> Result<Opened> {
     let stream = UnixStream::connect(socket).with_context(|| format!("connecting to {}", socket.display()))?;
     let conn = Connection::from_socket(stream)?;
     let mut queue = conn.new_event_queue();
@@ -289,6 +290,7 @@ pub fn open(socket: &Path, output: &str) -> Result<Opened> {
     }
     f.destroy();
     let gpu = match (state.dma_buffer, std::env::var("QR_VD_CAPTURE").as_deref()) {
+        _ if !gpu => None,
         (_, Ok("shm")) => None,
         (None, _) => {
             tracing::info!("the compositor offers no DMA-BUF frames: capturing through shared memory");
