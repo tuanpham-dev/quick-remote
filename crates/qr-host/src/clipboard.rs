@@ -14,8 +14,16 @@ pub struct Clipboard {
 
 /// Starts clipboard sync for an X11 source; local changes go to the client.
 pub fn start(ctx: &HostCtx, ctl: qr_net::files::Control) -> Option<Clipboard> {
-    let display = ctx.args.source.strip_prefix("x11:")?;
-    let (tx, rx) = match qr_clip::spawn(display) {
+    // A Wayland desktop or the virtual display: wlr-data-control.
+    #[cfg(target_os = "linux")]
+    let wayland = ctx.screencopy_socket().map(|s| crate::wlclip::spawn(&s));
+    #[cfg(not(target_os = "linux"))]
+    let wayland: Option<anyhow::Result<_>> = None;
+    let started = match wayland {
+        Some(r) => r,
+        None => qr_clip::spawn(ctx.args.source.strip_prefix("x11:")?),
+    };
+    let (tx, rx) = match started {
         Ok(x) => x,
         Err(e) => {
             tracing::warn!("clipboard is off: {e:#}");

@@ -20,6 +20,17 @@ pub struct VirtualDisplay {
     /// Environment for apps on this display and for the portal client.
     pub env: Vec<(String, String)>,
     swaysock: PathBuf,
+    /// The display's Xwayland (`:N`), for X11 apps there.
+    pub x_display: Option<String>,
+}
+
+/// The X displays with a socket now.
+fn x_sockets() -> std::collections::HashSet<String> {
+    std::fs::read_dir("/tmp/.X11-unix")
+        .map(|d| {
+            d.flatten().filter_map(|e| e.file_name().to_str()?.strip_prefix('X').map(|n| format!(":{n}"))).collect()
+        })
+        .unwrap_or_default()
 }
 
 fn spawn(name: &'static str, cmd: &mut Command, log: &Path) -> Result<Child> {
@@ -100,7 +111,27 @@ context.modules = [
                 rt.join("next-output").display()
             ),
         )?;
-        let exec = desktop.map(|d| format!("exec {d}\n")).unwrap_or_default();
+        // The desktop command runs from a script: sway would expand `$…` in
+        // it as its own variables and split it on `;` and `,`. Sway doesn't
+        // give config commands the Xwayland display, so the script waits for
+        // the host to find it (`x-display`).
+        let exec = match desktop {
+            Some(d) => {
+                let script = rt.join("desktop.sh");
+                let xd = rt.join("x-display");
+                std::fs::write(
+                    &script,
+                    format!(
+                        "#!/bin/sh\nfor _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do \
+                         [ -s {xd} ] && break; sleep 0.1; done\n\
+                         [ -s {xd} ] && export DISPLAY=\"$(cat {xd})\"\n{d}\n",
+                        xd = xd.display()
+                    ),
+                )?;
+                format!("exec sh {}\n", script.display())
+            }
+            None => String::new(),
+        };
         std::fs::write(
             rt.join("sway.conf"),
             format!(
@@ -120,7 +151,13 @@ context.modules = [
             ("XDG_CURRENT_DESKTOP".into(), "sway".into()),
             ("DBUS_SESSION_BUS_ADDRESS".into(), bus.clone()),
         ];
-        let mut me = Self { runtime: rt.clone(), children: Vec::new(), env: Vec::new(), swaysock: PathBuf::new() };
+        let mut me = Self {
+            runtime: rt.clone(),
+            children: Vec::new(),
+            env: Vec::new(),
+            swaysock: PathBuf::new(),
+            x_display: None,
+        };
         let cmd = |prog: &str, env: &[(String, String)]| {
             let mut c = Command::new(prog);
             // A clean session environment: nothing from the desktop the
@@ -151,8 +188,21 @@ context.modules = [
             .env("WLR_RENDERER", if gpu { "gles2" } else { "pixman" })
             .env("LIBSEAT_BACKEND", "noop")
             .env("WLR_HEADLESS_OUTPUTS", "1");
+        let x_before = x_sockets();
         me.children.push(("sway", spawn("sway", &mut c, &log("sway"))?));
         wait_for(&rt.join("wayland-1"), "sway", Duration::from_secs(10))?;
+        // Xwayland's socket appears with the compositor (it starts lazily).
+        let end = Instant::now() + Duration::from_secs(3);
+        while me.x_display.is_none() && Instant::now() < end {
+            me.x_display = x_sockets().difference(&x_before).min().cloned();
+            if me.x_display.is_none() {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+        if let Some(d) = &me.x_display {
+            std::fs::write(rt.join("x-display"), d)?;
+            env.push(("DISPLAY".into(), d.clone()));
+        }
         env.push(("WAYLAND_DISPLAY".into(), "wayland-1".into()));
         let end = Instant::now() + Duration::from_secs(5);
         let sock = loop {

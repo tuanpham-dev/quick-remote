@@ -26,6 +26,8 @@ mod vdisplay;
 mod video;
 mod web;
 #[cfg(target_os = "linux")]
+mod wlclip;
+#[cfg(target_os = "linux")]
 mod wlinput;
 // The Linux-only sources' stand-ins elsewhere.
 #[cfg(not(target_os = "linux"))]
