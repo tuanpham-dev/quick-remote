@@ -11,7 +11,7 @@ use anyhow::{Context, Result, bail};
 use qr_media::encode::{EncodeConfig, Source};
 use qr_media::probe::EncoderInfo;
 use qr_proto::msg::Profile;
-use qr_proto::{Monitor, Msg};
+use qr_proto::Msg;
 
 use crate::HostCtx;
 use crate::ratectl::{Limits, RateCtl};
@@ -148,6 +148,7 @@ impl Video {
                 }
             })
         });
+        self.ctx.input.set_origin(id, (mon.x, mon.y));
         self.streams
             .lock()
             .expect("lock")

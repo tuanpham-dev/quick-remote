@@ -386,6 +386,28 @@ impl App {
                 }
             }
             WindowEvent::RedrawRequested => self.redraw_extra(),
+            // Pointer on this window lands on its monitor.
+            WindowEvent::CursorMoved { position, .. } => {
+                let (Some(x), Some(s)) = (&self.extra, &self.session) else { return };
+                let Some((pw, ph)) = x.video.size() else { return };
+                let (ox, oy, w, h) = fit(x.config.width, x.config.height, pw, ph);
+                let sx = (position.x as f32 - ox) / w * pw as f32;
+                let sy = (position.y as f32 - oy) / h * ph as f32;
+                if sx >= 0.0 && sy >= 0.0 && sx < pw as f32 && sy < ph as f32 {
+                    s.input.abs(EXTRA_STREAM, sx as u16, sy as u16);
+                }
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                let b = match button {
+                    MouseButton::Left => 1,
+                    MouseButton::Middle => 2,
+                    MouseButton::Right => 3,
+                    _ => return,
+                };
+                if let Some(s) = &self.session {
+                    s.input.send(InputEvent::Button { button: b, down: state == ElementState::Pressed });
+                }
+            }
             _ => {}
         }
     }

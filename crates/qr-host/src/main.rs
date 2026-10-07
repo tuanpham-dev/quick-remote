@@ -11,6 +11,7 @@ mod session;
 mod stream;
 mod screencopy;
 mod vdisplay;
+mod wlinput;
 mod video;
 #[cfg(target_os = "linux")]
 mod uinput;
@@ -248,7 +249,23 @@ async fn main() -> Result<()> {
         tracing::info!(element = e.element, codec = e.codec.name(), hw = e.hw, "encoder");
     }
 
-    let injector = input::open(&args.input, &args.source).context("opening the input backend")?;
+    let vd = match args.source.strip_prefix("vdisplay") {
+        Some(rest) => {
+            let (w, h) = args.size();
+            let desktop = rest.strip_prefix(':').filter(|d| !d.is_empty());
+            let d = vdisplay::VirtualDisplay::start(w, h, args.fps, desktop, !args.vd_software)
+                .context("starting the virtual display")?;
+            for _ in 1..args.vd_outputs {
+                d.add_output(w, h, args.fps).context("adding a virtual monitor")?;
+            }
+            tracing::info!(runtime = %d.runtime.display(), outputs = args.vd_outputs, "virtual display up");
+            Some(Mutex::new(d))
+        }
+        None => None,
+    };
+    let vd_socket = vd.as_ref().map(|d| d.lock().expect("lock").wayland_socket());
+    let injector =
+        input::open(&args.input, &args.source, vd_socket.as_deref()).context("opening the input backend")?;
     tracing::info!(backend = injector.name(), "input");
     let web_peers: Arc<web::WebPeers> = Arc::default();
     if let Some(wl) = args.web_listen {
@@ -286,20 +303,6 @@ async fn main() -> Result<()> {
             }
         });
     }
-    let vd = match args.source.strip_prefix("vdisplay") {
-        Some(rest) => {
-            let (w, h) = args.size();
-            let desktop = rest.strip_prefix(':').filter(|d| !d.is_empty());
-            let d = vdisplay::VirtualDisplay::start(w, h, args.fps, desktop, !args.vd_software)
-                .context("starting the virtual display")?;
-            for _ in 1..args.vd_outputs {
-                d.add_output(w, h, args.fps).context("adding a virtual monitor")?;
-            }
-            tracing::info!(runtime = %d.runtime.display(), outputs = args.vd_outputs, "virtual display up");
-            Some(Mutex::new(d))
-        }
-        None => None,
-    };
     let ctx = Arc::new(HostCtx { args, encoders, input: input::Input::new(injector), relays, web_peers, vd });
     let active: Arc<tokio::sync::Mutex<Option<Active>>> = Arc::default();
     while let Some(incoming) = ep.accept().await {

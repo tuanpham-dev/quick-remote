@@ -14,6 +14,9 @@ phase1)
 	run lan a1_a2
 	[[ -f "$here/a6.sh" ]] && run lan a6
 	[[ -f "$here/a10_a11.sh" ]] && run wan a10_a11
+	# Virtual display (ENV-BLOCKED without the render group).
+	run lan a16
+	run lan vd_input
 	;;
 phase2)
 	NAT_MODE=cone run nat-cone a4

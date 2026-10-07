@@ -289,11 +289,25 @@ pub struct InputState {
 pub struct Input {
     pub injector: Mutex<Box<dyn Injector>>,
     pub state: Mutex<InputState>,
+    /// Where each stream's picture sits on the desktop: absolute positions
+    /// are stream pixels plus this.
+    origins: Mutex<std::collections::HashMap<u8, (i32, i32)>>,
 }
 
 impl Input {
     pub fn new(injector: Box<dyn Injector>) -> Self {
-        Self { injector: Mutex::new(injector), state: Mutex::default() }
+        Self { injector: Mutex::new(injector), state: Mutex::default(), origins: Mutex::default() }
+    }
+
+    /// Records where stream `stream`'s monitor sits on the desktop.
+    pub fn set_origin(&self, stream: u8, origin: (i32, i32)) {
+        self.origins.lock().expect("lock").insert(stream, origin);
+    }
+
+    /// A stream position on the desktop.
+    fn place(&self, stream: u8, x: u16, y: u16) -> (u16, u16) {
+        let (ox, oy) = self.origins.lock().expect("lock").get(&stream).copied().unwrap_or((0, 0));
+        ((x as i32 + ox).clamp(0, u16::MAX as i32) as u16, (y as i32 + oy).clamp(0, u16::MAX as i32) as u16)
     }
 
     pub fn event(&self, ev: &InputEvent) {
@@ -316,7 +330,10 @@ impl Input {
                 }
                 inj.button(button, down)
             }
-            InputEvent::Abs { x, y, .. } => inj.abs(x, y),
+            InputEvent::Abs { stream, x, y } => {
+                let (x, y) = self.place(stream, x, y);
+                inj.abs(x, y)
+            }
             InputEvent::Wheel { dx, dy } => inj.wheel(dx as i32, dy as i32),
             InputEvent::Text { ref text } => inj.text(text),
             InputEvent::ReleaseAll => {
@@ -352,7 +369,8 @@ impl Input {
         let r = if dx != 0 || dy != 0 {
             inj.rel(dx as i32, dy as i32)
         } else if m.has_abs {
-            inj.abs(m.abs_x, m.abs_y)
+            let (x, y) = self.place(m.stream, m.abs_x, m.abs_y);
+            inj.abs(x, y)
         } else {
             Ok(())
         };
@@ -434,11 +452,25 @@ pub fn datagram(ctx: &HostCtx, d: &[u8]) {
     }
 }
 
-/// Builds the injector named by `--input`.
-pub fn open(spec: &str, source: &str) -> Result<Box<dyn Injector>> {
+/// Builds the injector named by `--input`. `vd_socket`: the virtual
+/// display's Wayland socket, when it is the source.
+pub fn open(spec: &str, source: &str, vd_socket: Option<&std::path::Path>) -> Result<Box<dyn Injector>> {
     let (kind, arg) = spec.split_once(':').unwrap_or((spec, ""));
     Ok(match kind {
         "none" => Box::new(NoInput),
+        // The virtual display: its compositor's virtual pointer and
+        // keyboard, plus uinput for pads and pen where allowed.
+        #[cfg(target_os = "linux")]
+        "auto" | "wayland" if vd_socket.is_some() => {
+            let wl = crate::wlinput::WlInput::open(vd_socket.expect("checked"))?;
+            match crate::uinput::Uinput::open(7680, 4320) {
+                Ok(u) => Box::new(Split { main: Box::new(wl), devices: Box::new(u), name: "wayland+uinput" }),
+                Err(e) => {
+                    tracing::warn!("gamepads and pen are off: {e:#}");
+                    Box::new(wl)
+                }
+            }
+        }
         "xtest" => Box::new(xtest::XTest::open(if arg.is_empty() { ":0" } else { arg })?),
         #[cfg(target_os = "linux")]
         "uinput" => {
@@ -457,7 +489,9 @@ pub fn open(spec: &str, source: &str) -> Result<Box<dyn Injector>> {
                 {
                     let (w, h) = xtest::screen_size(display).unwrap_or((1920, 1080));
                     match crate::uinput::Uinput::open(w as i32, h as i32) {
-                        Ok(u) => return Ok(Box::new(Split { main: Box::new(x), devices: Box::new(u) })),
+                        Ok(u) => {
+                            return Ok(Box::new(Split { main: Box::new(x), devices: Box::new(u), name: "xtest+uinput" }));
+                        }
                         Err(e) => tracing::warn!("gamepads and pen are off: {e:#}"),
                     }
                 }
@@ -538,6 +572,7 @@ mod win {
 struct Split {
     main: Box<dyn Injector>,
     devices: Box<dyn Injector>,
+    name: &'static str,
 }
 
 #[cfg(not(windows))]
@@ -573,6 +608,6 @@ impl Injector for Split {
         self.devices.take_rumble()
     }
     fn name(&self) -> &'static str {
-        "xtest+uinput"
+        self.name
     }
 }

@@ -6,7 +6,7 @@
 //! text <rest of line>
 //! button <n> down|up
 //! rel <dx> <dy> [count]          (count steps, 1 ms apart)
-//! abs <x> <y>
+//! abs <x> <y> [stream]        (stream pixels)
 //! wheel <dx> <dy>
 //! release
 //! pen <x> <y> <pressure> <tilt_x> <tilt_y> <flags>
@@ -85,7 +85,7 @@ pub async fn run(path: &str, input: &Input, ctl: &qr_net::files::Control) -> Res
                     }
                 }
             }
-            "abs" => input.abs(0, num(0)? as u16, num(1)? as u16),
+            "abs" => input.abs(num(2).unwrap_or(0) as u8, num(0)? as u16, num(1)? as u16),
             "wheel" => send(input, InputEvent::Wheel { dx: num(0)? as i16, dy: num(1)? as i16 }),
             "release" => send(input, InputEvent::ReleaseAll),
             // pen <x> <y> <pressure 0-65535> <tilt_x> <tilt_y> <flags>, in stream pixels.
