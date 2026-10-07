@@ -5,9 +5,13 @@ mod clipboard;
 mod input;
 mod media;
 mod outbox;
+mod portal;
 mod ratectl;
 mod session;
 mod stream;
+mod screencopy;
+mod vdisplay;
+mod video;
 #[cfg(target_os = "linux")]
 mod uinput;
 mod web;
@@ -95,6 +99,12 @@ pub struct Args {
     /// (default ~/QuickRemote/Outbox).
     #[arg(long)]
     outbox: Option<PathBuf>,
+    /// Render the virtual display in software (pixman) instead of on the GPU.
+    #[arg(long)]
+    vd_software: bool,
+    /// Number of virtual monitors, side by side, all at `--size`.
+    #[arg(long, default_value_t = 1)]
+    vd_outputs: u8,
     /// Input backend: `auto` (from the source), `none`, `xtest:<display>`.
     #[arg(long, default_value = "auto")]
     input: String,
@@ -129,6 +139,8 @@ pub struct HostCtx {
     pub relays: Arc<Mutex<Vec<SocketAddr>>>,
     /// Browser sessions piped through the web gateway.
     pub web_peers: Arc<web::WebPeers>,
+    /// The virtual display, for `--source vdisplay`.
+    pub vd: Option<Mutex<vdisplay::VirtualDisplay>>,
 }
 
 impl HostCtx {
@@ -140,9 +152,15 @@ impl HostCtx {
         self.args.outbox.clone().unwrap_or_else(|| dirs_home().join("QuickRemote").join("Outbox"))
     }
 
-    /// The mode a stream runs at: the configured size for now (virtual
-    /// displays follow the client's request once they exist).
-    pub fn display_mode(&self, _w: u16, _h: u16, _refresh: u16) -> (u32, u32, u32) {
+    /// The mode a stream starts at: a virtual display takes the client's
+    /// request (up to 4K120); real desktops keep their own size.
+    pub fn display_mode(&self, w: u16, h: u16, refresh: u16) -> (u32, u32, u32) {
+        if self.vd.is_some() {
+            let (dw, dh) = self.args.size();
+            let (w, h) = if w >= 320 && h >= 200 { (w.min(3840) as u32 & !1, h.min(2160) as u32 & !1) } else { (dw, dh) };
+            let fps = if refresh > 0 { (refresh as u32).min(120) } else { self.args.fps };
+            return (w, h, fps);
+        }
         if let Some(display) = self.args.source.strip_prefix("x11:")
             && let Ok((w, h)) = x11_size(display)
         {
@@ -268,7 +286,21 @@ async fn main() -> Result<()> {
             }
         });
     }
-    let ctx = Arc::new(HostCtx { args, encoders, input: input::Input::new(injector), relays, web_peers });
+    let vd = match args.source.strip_prefix("vdisplay") {
+        Some(rest) => {
+            let (w, h) = args.size();
+            let desktop = rest.strip_prefix(':').filter(|d| !d.is_empty());
+            let d = vdisplay::VirtualDisplay::start(w, h, args.fps, desktop, !args.vd_software)
+                .context("starting the virtual display")?;
+            for _ in 1..args.vd_outputs {
+                d.add_output(w, h, args.fps).context("adding a virtual monitor")?;
+            }
+            tracing::info!(runtime = %d.runtime.display(), outputs = args.vd_outputs, "virtual display up");
+            Some(Mutex::new(d))
+        }
+        None => None,
+    };
+    let ctx = Arc::new(HostCtx { args, encoders, input: input::Input::new(injector), relays, web_peers, vd });
     let active: Arc<tokio::sync::Mutex<Option<Active>>> = Arc::default();
     while let Some(incoming) = ep.accept().await {
         let (ctx, id, keystore, pin, limiter, active, name) =

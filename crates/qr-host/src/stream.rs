@@ -54,6 +54,7 @@ impl VideoStream {
         rate: RateCtl,
         conn: quinn::Connection,
         max_datagram: Option<usize>,
+        next_frame: Arc<AtomicU32>,
     ) -> Result<Arc<Self>> {
         let (tx, rx) = mpsc::channel::<EncodedFrame>(4);
         let clock = qr_media::ClockMap::new(qr_net::clock::now_us);
@@ -83,6 +84,7 @@ impl VideoStream {
             loss.clone(),
             refresh,
             max_datagram,
+            next_frame,
         ));
         let s = Arc::new(Self {
             id,
@@ -147,9 +149,11 @@ async fn send_loop(
     loss_permille: Arc<AtomicU32>,
     refresh: Refresh,
     max_datagram: Option<usize>,
+    // Shared by the streams one after another: a restarted stream carries
+    // on numbering, so the client's reassembler needs no reset.
+    next_frame: Arc<AtomicU32>,
 ) {
     let mut still = StillState { last_change: std::time::Instant::now(), refreshing: false, refreshed: false };
-    let mut frame_id: u32 = 0;
     let mut pk = Packetizer::new(stream, 1200, 0.1);
     let buffer = qr_net::endpoint::BUFFER as f64;
     let mut recheck = tokio::time::interval(Duration::from_millis(5));
@@ -186,8 +190,8 @@ async fn send_loop(
             encode_end_us: f.encode_end_us,
             send_us: qr_net::clock::now_us(),
         };
+        let frame_id = next_frame.fetch_add(1, Ordering::Relaxed);
         let dgrams = pk.frame(frame_id, if f.keyframe { vflags::KEYFRAME } else { 0 }, &meta, &f.au);
-        frame_id = frame_id.wrapping_add(1);
         let mut bytes = 0u64;
         for d in dgrams {
             bytes += d.len() as u64;

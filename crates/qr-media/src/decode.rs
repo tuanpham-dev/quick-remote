@@ -30,8 +30,13 @@ pub struct DecodedFrame {
     pub data: Vec<u8>,
     pub offsets: [usize; 3],
     pub strides: [usize; 3],
-    /// Time spent in the decoder, µs.
+    /// Time from push to picture, µs (latency, including any frame the
+    /// decoder holds back until the next one arrives).
     pub decode_us: u64,
+    /// Decoding work, µs: like `decode_us`, but a picture held until the
+    /// next push counts from that push. A decoder that falls behind still
+    /// shows its whole backlog here.
+    pub work_us: u64,
 }
 
 pub struct Decoder {
@@ -75,9 +80,21 @@ impl Decoder {
                     let caps = sample.caps().ok_or(gst::FlowError::NotNegotiated)?;
                     let info = gst_video::VideoInfo::from_caps(caps).map_err(|_| gst::FlowError::NotNegotiated)?;
                     let buf = sample.buffer().ok_or(gst::FlowError::Error)?;
-                    let (frame_id, decode_us) = match p2.lock().expect("lock").pop_front() {
-                        Some((id, t)) => (id, t.elapsed().as_micros() as u64),
-                        None => (0, 0),
+                    let (frame_id, decode_us, work_us) = {
+                        let mut q = p2.lock().expect("lock");
+                        match q.pop_front() {
+                            Some((id, t)) => {
+                                let d = t.elapsed().as_micros() as u64;
+                                // One frame queued behind this one: a hold,
+                                // released by that push. More: a backlog.
+                                let work = match (q.len(), q.back()) {
+                                    (1, Some((_, last))) => last.elapsed().as_micros() as u64,
+                                    _ => d,
+                                };
+                                (id, d, work)
+                            }
+                            None => (0, 0, 0),
+                        }
                     };
                     let format = match info.format() {
                         gst_video::VideoFormat::Nv12 => PixelFormat::Nv12,
@@ -101,6 +118,7 @@ impl Decoder {
                         offsets,
                         strides,
                         decode_us,
+                        work_us,
                     });
                     Ok(gst::FlowSuccess::Ok)
                 })

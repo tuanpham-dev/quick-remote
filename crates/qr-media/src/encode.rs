@@ -26,6 +26,9 @@ pub enum Source {
     Test { pattern: String },
     /// A PipeWire video node, optionally on a portal-provided fd.
     PipeWire { fd: Option<i32>, node: u32 },
+    /// Frames pushed by the caller through [`Encoder::push`] (screencopy).
+    /// `format`: a GStreamer raw format such as `BGRx`.
+    App { format: String },
     /// An X11 display (`ximagesrc`), optionally one monitor's rectangle.
     X11 { display: String, rect: Option<(i32, i32, u32, u32)> },
     /// Windows desktop capture (`d3d11screencapturesrc`).
@@ -88,6 +91,8 @@ pub struct Encoder {
     source_fps: u32,
     /// (target kbit/s, frame-rate cap) last requested.
     rate: std::sync::Mutex<(u32, u32)>,
+    /// The `appsrc` of a [`Source::App`] pipeline.
+    appsrc: Option<gst_app::AppSrc>,
 }
 
 /// The GStreamer description of a capture source (also used by tests to
@@ -108,8 +113,15 @@ pub fn source_desc(s: &Source, w: u32, h: u32, fps: u32) -> String {
         }
         Source::PipeWire { fd, node } => {
             let fd = fd.map(|f| format!(" fd={f}")).unwrap_or_default();
-            format!("pipewiresrc{fd} path={node} always-copy=false do-timestamp=true keepalive-time=1000")
+            // System memory: the converter in front of the encoder can't
+            // take DMA-BUF.
+            format!("pipewiresrc{fd} path={node} always-copy=false do-timestamp=true keepalive-time=1000 ! video/x-raw")
         }
+        // Variable rate (frames come on damage); timestamped on push.
+        Source::App { format } => format!(
+            "appsrc name=src is-live=true do-timestamp=true format=time max-buffers=2 leaky-type=downstream \
+             caps=\"video/x-raw,format={format},width={w},height={h},framerate=0/1\""
+        ),
         Source::X11 { display, rect } => {
             let r = rect
                 .map(|(x, y, w, h)| {
@@ -254,11 +266,12 @@ impl Encoder {
         // VA and D3D11 encoders take GPU memory directly; everything else
         // gets system memory through videoconvert.
         let convert = match (e.family, &cfg.source) {
-            (Family::Va, Source::PipeWire { .. }) => {
+            (Family::Va, Source::PipeWire { .. } | Source::App { .. }) => {
                 if gst::ElementFactory::find("vapostproc").is_some() {
                     format!("vapostproc ! video/x-raw(memory:VAMemory),format={fmt}")
                 } else {
-                    format!("videoconvert ! video/x-raw,format={fmt}")
+                    // No VPP on this driver: convert on the CPU, threaded.
+                    format!("videoconvert n-threads=4 ! video/x-raw,format={fmt}")
                 }
             }
             (Family::Nv | Family::Qsv | Family::Amf | Family::MediaFoundation, Source::D3d11 { .. }) => {
@@ -286,6 +299,23 @@ impl Encoder {
             set_prop(&p, "config-interval", "-1");
         }
         configure(&enc, e.family, cfg);
+        // The VA encoders output asynchronously, two frames late, when
+        // upstream answers the latency query as not live, which pipewiresrc
+        // does. Every source here is live: say so.
+        enc.static_pad("sink").expect("encoder sink pad").add_probe(
+            gst::PadProbeType::QUERY_UPSTREAM | gst::PadProbeType::PULL,
+            |_, info| {
+                if let Some(gst::PadProbeData::Query(q)) = &mut info.data
+                    && let gst::QueryViewMut::Latency(l) = q.view_mut()
+                {
+                    let (live, min, max) = l.result();
+                    if !live {
+                        l.set(true, min, max);
+                    }
+                }
+                gst::PadProbeReturn::Ok
+            },
+        );
         let sink = pipeline.by_name("out").expect("named").downcast::<gst_app::AppSink>().expect("appsink");
 
         let ctl = Arc::new(Control::default());
@@ -339,7 +369,11 @@ impl Encoder {
                         .and_then(|caps| caps.structure(0).map(|st| (st.get::<i32>("width"), st.get::<i32>("height"))))
                         .map(|(w, h)| (w.unwrap_or(0) as u32, h.unwrap_or(0) as u32))
                         .unwrap_or((0, 0));
-                    let (capture, start) = c.inflight.lock().expect("lock").pop_front().unwrap_or((end, end));
+                    let (capture, start) = {
+                        let mut q = c.inflight.lock().expect("lock");
+                        tracing::trace!(inflight = q.len(), "encoded");
+                        q.pop_front().unwrap_or((end, end))
+                    };
                     let map = buf.map_readable().map_err(|_| gst::FlowError::Error)?;
                     c.encoded.fetch_add(1, Ordering::Relaxed);
                     on_frame(EncodedFrame {
@@ -356,6 +390,7 @@ impl Encoder {
                 })
                 .build(),
         );
+        let appsrc = pipeline.by_name("src").and_then(|e| e.downcast::<gst_app::AppSrc>().ok());
         pipeline.set_state(gst::State::Playing).context("starting the encode pipeline")?;
         Ok(Self {
             pipeline,
@@ -366,7 +401,15 @@ impl Encoder {
             element: e.element,
             source_fps: cfg.fps.max(1),
             rate: std::sync::Mutex::new((cfg.bitrate_kbps, cfg.fps.max(1))),
+            appsrc,
         })
+    }
+
+    /// Feeds one tightly packed frame to a [`Source::App`] pipeline.
+    pub fn push(&self, frame: Vec<u8>) -> Result<()> {
+        let src = self.appsrc.as_ref().context("this encoder has its own source")?;
+        src.push_buffer(gst::Buffer::from_mut_slice(frame)).map_err(|e| anyhow!("pushing a frame: {e:?}"))?;
+        Ok(())
     }
 
     pub fn set_bitrate(&self, kbps: u32) {

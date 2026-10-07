@@ -98,6 +98,18 @@ primary bool.
 Modes (`SetMode`, `SessionStart`): bit 0 relative mouse, 1 sharp text,
 2 microphone, 3 clipboard, 4 audio.
 
+Streams: stream 0 starts with the session. `SelectMonitor` on a running
+stream moves it to that monitor; on a stream id not running (1–3), it opens
+one more stream (a second window). `StreamStop` from the client closes an
+extra stream, and the host confirms with its own `StreamStop`. Stream 0
+can't be stopped. Each (re)start is announced by `StreamStarted` and begins
+with a keyframe. A restarted stream keeps its frame numbering, so the
+client's reassembler and decoder carry on. Video datagrams carry the stream
+id. `FrameLost`/`KeyframeReq` name a stream; `Feedback` describes the link
+and applies to every stream. `Resize` changes a virtual display's monitor
+mode; the host applies it once requests stop for 300 ms. Real desktops
+ignore it, and the client scales the picture instead.
+
 Error codes: 1 version mismatch, 2 PIN required, 3 wrong PIN, 4 rate limited,
 5 no common codec, 6 busy, 7 capture failed, 8 internal, 9 not paired.
 

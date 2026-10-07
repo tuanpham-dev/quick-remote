@@ -25,6 +25,8 @@ use crate::session::{self, ConnectOpts, Connected, FrameTimes};
 
 pub enum UserEvent {
     Frame,
+    /// A picture for the second window.
+    ExtraFrame,
     Discovery(Discovery),
     Connected(Arc<Connected>),
     Ended(String),
@@ -43,12 +45,30 @@ enum Screen {
 }
 
 struct Gpu {
+    instance: wgpu::Instance,
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     video: VideoRenderer,
     egui: egui_wgpu::Renderer,
+}
+
+/// The stream a second window shows.
+const EXTRA_STREAM: u8 = 1;
+
+/// A second window showing another monitor (view only).
+struct ExtraWindow {
+    window: Arc<Window>,
+    surface: wgpu::Surface<'static>,
+    config: wgpu::SurfaceConfiguration,
+    video: VideoRenderer,
+}
+
+/// The monitor after `cur` in the host's list (wrapping).
+fn next_monitor(monitors: &[qr_proto::Monitor], cur: u8) -> Option<u8> {
+    let i = monitors.iter().position(|m| m.id == cur).map_or(0, |i| i + 1);
+    monitors.get(i % monitors.len().max(1)).map(|m| m.id)
 }
 
 pub struct Config {
@@ -77,6 +97,8 @@ pub struct App {
     target: Option<String>,
     frame_slot: Arc<Mutex<Option<(DecodedFrame, FrameTimes)>>>,
     shown: Option<FrameTimes>,
+    extra: Option<ExtraWindow>,
+    extra_slot: Arc<Mutex<Option<DecodedFrame>>>,
     // UI state.
     pin_input: String,
     addr_input: String,
@@ -129,6 +151,8 @@ pub fn run(cfg: Config) -> Result<()> {
         session: None,
         target: None,
         frame_slot: Arc::default(),
+        extra: None,
+        extra_slot: Arc::default(),
         shown: None,
         pin_input: String::new(),
         addr_input: String::new(),
@@ -267,6 +291,26 @@ impl App {
                     (s.ctl)(qr_proto::Msg::SetMode { modes });
                 }
             }
+            // Next monitor in this window.
+            KeyCode::KeyN => {
+                if let Some(s) = &self.session {
+                    let (mons, cur) = {
+                        let sh = s.shared.lock().expect("lock");
+                        (sh.monitors.clone(), sh.stats.monitor)
+                    };
+                    if let Some(monitor) = next_monitor(&mons, cur).filter(|m| *m != cur) {
+                        (s.ctl)(qr_proto::Msg::SelectMonitor { stream: 0, monitor });
+                    }
+                }
+            }
+            // A second window on the next monitor (again: close it).
+            KeyCode::KeyW => {
+                if self.extra.is_some() {
+                    self.close_extra();
+                } else {
+                    self.open_extra(el);
+                }
+            }
             KeyCode::KeyQ => {
                 if let Some(s) = self.session.take() {
                     self.release_all();
@@ -282,6 +326,106 @@ impl App {
             _ => return false,
         }
         true
+    }
+
+    fn open_extra(&mut self, el: &ActiveEventLoop) {
+        let (Some(s), Some(gpu)) = (&self.session, &self.gpu) else { return };
+        let (mons, cur) = {
+            let sh = s.shared.lock().expect("lock");
+            (sh.monitors.clone(), sh.stats.monitor)
+        };
+        let Some(monitor) = next_monitor(&mons, cur) else { return };
+        let attrs = Window::default_attributes()
+            .with_title(format!("QuickRemote — monitor {monitor}"))
+            .with_inner_size(winit::dpi::LogicalSize::new(960.0, 540.0));
+        let window = match el.create_window(attrs) {
+            Ok(w) => Arc::new(w),
+            Err(e) => {
+                tracing::warn!("can't open a second window: {e}");
+                return;
+            }
+        };
+        let surface = match gpu.instance.create_surface(window.clone()) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("can't render a second window: {e}");
+                return;
+            }
+        };
+        let size = window.inner_size();
+        let config = wgpu::SurfaceConfiguration {
+            width: size.width.max(1),
+            height: size.height.max(1),
+            ..gpu.config.clone()
+        };
+        surface.configure(&gpu.device, &config);
+        let video = VideoRenderer::new(&gpu.device, config.format);
+        (s.ctl)(qr_proto::Msg::SelectMonitor { stream: EXTRA_STREAM, monitor });
+        self.extra = Some(ExtraWindow { window, surface, config, video });
+    }
+
+    fn close_extra(&mut self) {
+        if self.extra.take().is_some()
+            && let Some(s) = &self.session
+        {
+            (s.ctl)(qr_proto::Msg::StreamStop { stream: EXTRA_STREAM });
+        }
+    }
+
+    fn extra_window_event(&mut self, ev: WindowEvent) {
+        match ev {
+            WindowEvent::CloseRequested => self.close_extra(),
+            WindowEvent::Resized(size) => {
+                let (Some(x), Some(gpu)) = (self.extra.as_mut(), &self.gpu) else { return };
+                x.config.width = size.width.max(1);
+                x.config.height = size.height.max(1);
+                x.surface.configure(&gpu.device, &x.config);
+                if let Some(s) = &self.session {
+                    let (width, height) = (size.width as u16, size.height as u16);
+                    (s.ctl)(qr_proto::Msg::Resize { stream: EXTRA_STREAM, width, height, refresh: 0 });
+                }
+            }
+            WindowEvent::RedrawRequested => self.redraw_extra(),
+            _ => {}
+        }
+    }
+
+    fn redraw_extra(&mut self) {
+        let (Some(x), Some(gpu)) = (self.extra.as_mut(), &self.gpu) else { return };
+        if let Some(f) = self.extra_slot.lock().expect("lock").take() {
+            x.video.upload(&gpu.device, &gpu.queue, &f);
+        }
+        let frame = match x.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+            _ => {
+                x.surface.configure(&gpu.device, &x.config);
+                return;
+            }
+        };
+        let view = frame.texture.create_view(&Default::default());
+        let mut enc = gpu.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("extra video"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            x.video.draw(&gpu.queue, &mut pass, x.config.width, x.config.height);
+        }
+        gpu.queue.submit([enc.finish()]);
+        x.window.pre_present_notify();
+        gpu.queue.present(frame);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui) -> Option<(String, Option<String>)> {
@@ -602,7 +746,7 @@ impl ApplicationHandler<UserEvent> for App {
             None,
             None,
         ));
-        self.gpu = Some(Gpu { surface, device, queue, config, video, egui });
+        self.gpu = Some(Gpu { instance, surface, device, queue, config, video, egui });
         self.window = Some(window.clone());
         window.request_redraw();
     }
@@ -614,9 +758,22 @@ impl ApplicationHandler<UserEvent> for App {
                     w.request_redraw();
                 }
             }
+            UserEvent::ExtraFrame => {
+                if let Some(x) = &self.extra {
+                    x.window.request_redraw();
+                }
+                return;
+            }
             UserEvent::Discovery(d) => self.hosts.apply(d),
             UserEvent::Connected(c) => {
                 crate::start_pads(&c);
+                let (slot, proxy) = (self.extra_slot.clone(), self.proxy.clone());
+                *c.extra_sink.lock().expect("lock") = Some(Arc::new(move |stream, f| {
+                    if stream == EXTRA_STREAM {
+                        *slot.lock().expect("lock") = Some(f);
+                        let _ = proxy.send_event(UserEvent::ExtraFrame);
+                    }
+                }));
                 self.session = Some(c);
                 self.screen = Screen::Session;
                 self.update_title();
@@ -625,6 +782,7 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Failed(e) => self.screen = Screen::Error(e),
             UserEvent::Ended(reason) => {
                 self.session = None;
+                self.extra = None;
                 self.held.clear();
                 if reason == "bye" || self.screen != Screen::Session {
                     return;
@@ -648,7 +806,11 @@ impl ApplicationHandler<UserEvent> for App {
         }
     }
 
-    fn window_event(&mut self, el: &ActiveEventLoop, _id: WindowId, ev: WindowEvent) {
+    fn window_event(&mut self, el: &ActiveEventLoop, id: WindowId, ev: WindowEvent) {
+        if self.extra.as_ref().is_some_and(|x| x.window.id() == id) {
+            self.extra_window_event(ev);
+            return;
+        }
         let in_session = self.screen == Screen::Session && self.session.is_some();
         if let (Some(st), Some(w)) = (self.egui_state.as_mut(), &self.window)
             && !in_session

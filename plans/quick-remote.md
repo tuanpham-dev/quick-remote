@@ -174,7 +174,7 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
     - Each output carries PTS-mapped capture time and encode start and end times (from pad probes).
   - Depends on: T1.9
   - Done when: `videotestsrc` → each probed encoder yields decodable AUs, and IDR on demand is under 1 frame late.
-- [ ] **T1.11 — virtual display**
+- [x] **T1.11 — virtual display**
   - Files: `crates/qr-host/src/vdisplay.rs`
   - Do:
     - Spawn a private runtime dir and D-Bus session, then `pipewire` + `wireplumber`, then sway with a generated config: `output HEADLESS-1 mode WxH@RHz`, `xwayland enable`, `exec` the desktop. The env is `WLR_BACKENDS=headless,libinput WLR_RENDERER=gles2 LIBSEAT_BACKEND=noop WLR_LIBINPUT_NO_DEVICES=1`.
@@ -280,7 +280,7 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
     - Host target dir: `~/Downloads/QuickRemote`. Client: drag and drop onto the window (winit `DroppedFile`) and a "Receive" folder.
   - Depends on: T1.15
   - Done when: A25 passes.
-- [ ] **T1.23 — multi-monitor**
+- [x] **T1.23 — multi-monitor**
   - Files: `crates/qr-host/src/vdisplay.rs`, `crates/qr-host/src/monitors.rs`, `crates/qr-client/src/session.rs`
   - Do: `swaymsg create_output` adds headless outputs (HEADLESS-2…), each captured through its own portal ScreenCast session, so each gets its own PipeWire node. `MonitorList` and `SelectMonitor`. The video datagram `stream` byte selects the monitor. The client opens a second window as a second video stream inside the same session.
   - Depends on: T1.12, T1.15
@@ -522,6 +522,10 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
 - Phase 4 so far: `qr-win` (SendInput scancodes, absolute/relative mouse, wheel, Unicode text, synthetic pen, ViGEmBus pads with rumble) compile-checks for x86_64-pc-windows-msvc. The full host can't be cross-checked here: `ring` needs a Windows C toolchain (setup adds clang/lld). T4.3 capture uses the existing `d3d11` source string; T4.5 and T4.6 aren't started.
 - T1.19/T1.20: Linux uinput keyboard, mouse, pen and Xbox-style pads with force feedback are written (`crates/qr-host/src/uinput.rs`), plus client pads through gilrs (`--fake-pad` for tests). Running them waits on uinput access (setup).
 - T1.17/T1.18 (partial): input stream, motion running totals, XTest injector and the `--script` test driver. A19a, A20 and A23 pass (input p95 0.56–0.66 ms). uinput waits on root setup.
+- T1.11/T1.12/T1.23 (2026-10-07): `--source vdisplay[:CMD]` runs headless sway (GLES2 on the render node, or `--vd-software`) with its own D-Bus, PipeWire and portals, and `--vd-outputs N` monitors. **Deviation from T1.12:** the virtual display is captured with wlr-screencopy straight from sway (`screencopy.rs`, shared-memory buffers into an `appsrc`), not through the ScreenCast portal. Two reasons. pipewiresrc 1.4.2 clears its possible caps after the first negotiation, so the renegotiation xdg-desktop-portal-wlr does after a start or a resize fails with "unhandled format", and xdpw then exits. It also stalled at random on stream start ("out of buffers"). Screencopy copies only on damage and repeats the last frame every 500 ms on a still screen. Zero copy (screencopy's linux-dmabuf buffers into VA) is still to do; the copy costs about 3.8 ms at 1600×900. The portal path (`portal.rs`) stays for real Wayland desktops (T1.28) and will hit the same pipewiresrc bugs there.
+- VA encoders output two frames late (async mode) when upstream answers the latency query "not live", as pipewiresrc does here. The encoder's sink pad now reports live. On the virtual display that took capture → decoded from 47 ms to 11 ms p50 (p95 18–23 ms) at 1600×900@60.
+- Video sessions are restartable and multi-stream (`video.rs`). `SelectMonitor` moves a stream or opens one more (up to 4), `StreamStop` closes it, and `Resize` re-modes a virtual monitor (debounced 300 ms). Frame numbering carries on across restarts. The window client switches monitors with Ctrl+Alt+Shift+N and opens a view-only second window on the next monitor with Ctrl+Alt+Shift+W (checked under Xvfb: window drawn, stream 1 started and stopped). A16 and R16 (`tests/e2e/a16.sh`) pass 3/3: two monitors listed, both streams at ≥45 fps, a swap, a resize to 1280×720, and the extra stream stopped. Input in the second window, and Wayland input into the virtual display, are still to do.
+- A10 regression fixed: the decode-time backoff (commit 41f0d44) read openh264's one-frame hold as a slow decoder. That locked A10 at 5–15 fps and about 0.8 Mbit/s (the previous commit fails A10b too). The client now reports decoding work (`work_us`): a picture released by the next push counts from that push, and a backlog still counts in full. The host steps down only after 3 slow windows in a row, at most every 500 ms. A10 then passes 3/3 at a steady 60 fps and 5–6 Mbit/s with 100% of seconds in band, and A25 (GPU) and A8 (p50 6.7 ms) still pass.
 
 ## Open Questions / Risks
 - **Pen inside the virtual display.** Resolved in pre-flight: the virtual display is sway headless with libinput, so the uinput pen reaches apps there. The risk is that sway/libinput needs device access through the `input` group (T0.2) and `LIBSEAT_BACKEND=noop`. Unverified until T0.2 is done; T1.11 checks it first.
@@ -529,7 +533,7 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
 - **Text mode: the first borrowed character is sometimes dropped** (found in T1.18). Characters missing from the host layout are typed by lending them a spare keycode. Measured with xev on Xvfb, about 1 run in 3 drops the first borrowed character of the session (`é` in "héllo 漢字"). Later borrowed characters always arrive, and characters in the layout use their own key. A 20 ms pause after each remap and a warm-up remap at start didn't fix it. Handling: investigate, either a client-side check with a real toolkit (GTK) once the virtual display exists, or typing borrowed characters through uinput + XKB keymap updates on Wayland hosts.
 - **HEVC on this machine.** Debian's free Intel driver exposes only `vah264lpenc`. HEVC and 4:4:4 need `intel-media-va-driver-non-free` (in T0.2). Until then, A7 reports H.264 on VA-API, and A12 uses the still-refresh path.
 - **Root-only setup.** uinput, KVM, Docker, render group and packages need T0.2, run by the user. The criteria that depend on it are ENV-BLOCKED until then.
-- **Portal renegotiation on resize** (xdg-desktop-portal-wlr) is unverified. Fallback: restart the ScreenCast session on resize, with a keyframe on the new stream.
+- **pipewiresrc 1.4.2 can't renegotiate** (found in T1.12). This is why the virtual display uses screencopy. Real Wayland desktops (T1.28) still go through the portal and pipewiresrc. Handling: restart the cast when the stream errors, or feed PipeWire buffers to an `appsrc` from our own consumer (`pipewire` crate).
 - **The SPAKE2 crate's group constants must be reproducible in TypeScript** (T3.3). If not, the web client uses its own SPAKE2 variant, with both sides implemented in this repo.
 - **Windows GStreamer cross-check through cargo-xwin** is unverified (T4.2). The fallback is compile-checking Windows-specific modules behind a `cfg` with stubbed GStreamer.
 - From the spec's Risks: real-LAN and 1080p120/4K60 hardware gates, ViGEmBus (T4.1), Wayland portal prompts, symmetric NAT, anti-cheat, browser latency.

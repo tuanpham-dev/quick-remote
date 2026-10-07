@@ -345,9 +345,9 @@ async fn cli(args: Args) -> Result<()> {
         c.files.offer(p, &c.ctl).await?;
     }
     if let Some(path) = args.script.clone() {
-        let input = c.input.clone();
+        let (input, ctl) = (c.input.clone(), c.ctl.clone());
         tokio::spawn(async move {
-            if let Err(e) = script::run(&path, &input).await {
+            if let Err(e) = script::run(&path, &input, &ctl).await {
                 tracing::error!("script: {e:#}");
             }
         });

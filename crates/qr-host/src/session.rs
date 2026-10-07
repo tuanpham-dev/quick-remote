@@ -3,10 +3,10 @@
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Result, bail};
-use qr_media::encode::{EncodeConfig, Source};
+use qr_media::encode::Source;
 use qr_media::probe;
 use qr_net::session::{FramedSend, HostSession};
 use qr_proto::msg::{ErrorCode, HostStats, Monitor, PathKind, Profile, mode};
@@ -14,8 +14,7 @@ use qr_proto::{CodecCap, Msg};
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::HostCtx;
-use crate::ratectl::{Limits, RateCtl};
-use crate::stream::VideoStream;
+use crate::video::Video;
 
 fn is_private(ip: IpAddr) -> bool {
     match ip {
@@ -57,8 +56,8 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
     };
 
     let profile = pick_profile(ctx.args.profile(), &conn, &ctx.web_peers);
-    let (width, height, fps) = ctx.display_mode(want_width, want_height, want_refresh);
-    tracing::info!(client = %client_name, ?profile, encoder = enc.element, width, height, fps, "session start");
+    let mode = ctx.display_mode(want_width, want_height, want_refresh);
+    tracing::info!(client = %client_name, ?profile, encoder = enc.element, ?mode, "session start");
     send(
         &control_tx,
         &Msg::SessionStart {
@@ -74,58 +73,10 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
         },
     )
     .await?;
-    send(
-        &control_tx,
-        &Msg::MonitorList {
-            monitors: vec![Monitor {
-                id: 0,
-                name: "screen".into(),
-                width: width as u16,
-                height: height as u16,
-                refresh_mhz: fps * 1000,
-                x: 0,
-                y: 0,
-                primary: true,
-            }],
-        },
-    )
-    .await?;
+    send(&control_tx, &Msg::MonitorList { monitors: ctx.monitors() }).await?;
 
-    let limits = Limits { width, height, max_fps: fps, min_kbps: 300, max_kbps: ctx.args.max_kbps };
-    let mut rate = RateCtl::new(profile, limits, Instant::now());
-    if ctx.args.bitrate > 0 {
-        rate.target_kbps = ctx.args.bitrate;
-    }
-    let cfg = EncodeConfig {
-        encoder: enc.clone(),
-        source: ctx.source(),
-        width,
-        height,
-        fps,
-        bitrate_kbps: rate.target_kbps,
-        chroma444: false,
-    };
-    // Browser sessions: video datagrams must fit WebTransport's.
-    let max_datagram = ctx
-        .web_peers
-        .0
-        .lock()
-        .expect("lock")
-        .get(&conn.remote_address().port())
-        .filter(|_| conn.remote_address().ip().is_loopback())
-        .map(|p| p.max_datagram);
-    let stream = VideoStream::start(0, &cfg, rate, conn.clone(), max_datagram)?;
-    let _audio = match crate::media::start_audio(&ctx, &conn) {
-        Ok(a) => a,
-        Err(e) => {
-            tracing::warn!("audio is off: {e:#}");
-            None
-        }
-    };
-    ctx.input.reset();
-    let dgram_task = tokio::spawn(crate::media::datagram_loop(ctx.clone(), conn.clone()));
-    // Control messages from background tasks (files, outbox) go through a
-    // channel to one writer.
+    // Control messages from background tasks (files, outbox, video) go
+    // through a channel to one writer.
     let (ctl_tx, mut ctl_rx) = tokio::sync::mpsc::unbounded_channel::<Msg>();
     let ctl_writer = {
         let tx = control_tx.clone();
@@ -140,32 +91,41 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
     let ctl: qr_net::files::Control = Arc::new(move |m| {
         let _ = ctl_tx.send(m);
     });
+
+    // Browser sessions: video datagrams must fit WebTransport's.
+    let max_datagram = ctx
+        .web_peers
+        .0
+        .lock()
+        .expect("lock")
+        .get(&conn.remote_address().port())
+        .filter(|_| conn.remote_address().ip().is_loopback())
+        .map(|p| p.max_datagram);
+    let video = Arc::new(Video::new(ctx.clone(), conn.clone(), enc.clone(), profile, max_datagram, ctl.clone()));
+    video.start(0, 0, mode).await?;
+    let _audio = match crate::media::start_audio(&ctx, &conn) {
+        Ok(a) => a,
+        Err(e) => {
+            tracing::warn!("audio is off: {e:#}");
+            None
+        }
+    };
+    ctx.input.reset();
+    let dgram_task = tokio::spawn(crate::media::datagram_loop(ctx.clone(), conn.clone()));
     let files = qr_net::files::Files::new(conn.clone(), ctx.files_dir(), 2);
     let uni_task = tokio::spawn(uni_streams(ctx.clone(), conn.clone(), files.clone(), ctl.clone()));
     let outbox_task = tokio::spawn(crate::outbox::run(ctx.outbox_dir(), files.clone(), ctl.clone()));
     let clipboard = crate::clipboard::start(&ctx, ctl.clone());
-    send(
-        &control_tx,
-        &Msg::StreamStarted {
-            stream: 0,
-            monitor: 0,
-            codec: enc.codec as u8,
-            chroma444: false,
-            width: width as u16,
-            height: height as u16,
-            fps: fps as u16,
-        },
-    )
-    .await?;
 
     // Stats once a second.
     let stats_task = {
-        let (stream, tx, enc_name, conn2) = (stream.clone(), control_tx.clone(), enc.element.to_string(), conn.clone());
+        let (video, tx, enc_name, conn2) = (video.clone(), control_tx.clone(), enc.element.to_string(), conn.clone());
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_secs(1));
             tick.tick().await;
             loop {
                 tick.tick().await;
+                let Some(stream) = video.stream(0) else { continue };
                 let c = &stream.counters;
                 let frames = c.frames_sent.swap(0, Ordering::Relaxed).max(1);
                 let r = stream.rate.lock().expect("lock").fps;
@@ -217,7 +177,7 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
         })
     };
     let result =
-        control_loop(&ctx, &conn, &mut control_rx, &control_tx, &stream, &files, &ctl, clipboard.as_ref()).await;
+        control_loop(&ctx, &conn, &mut control_rx, &control_tx, &video, &files, &ctl, clipboard.as_ref()).await;
     ctl_writer.abort();
     rumble_task.abort();
     outbox_task.abort();
@@ -235,7 +195,7 @@ async fn control_loop(
     conn: &quinn::Connection,
     rx: &mut qr_net::session::FramedRecv,
     tx: &AsyncMutex<FramedSend>,
-    stream: &Arc<VideoStream>,
+    video: &Arc<Video>,
     files: &Arc<qr_net::files::Files>,
     ctl: &qr_net::files::Control,
     clipboard: Option<&crate::clipboard::Clipboard>,
@@ -255,15 +215,43 @@ async fn control_loop(
             Msg::Ping { seq, t_client } => {
                 send(tx, &Msg::Pong { seq, t_client, t_host: qr_net::clock::now_us() }).await?;
             }
-            Msg::Feedback(fb) => stream.feedback(&fb),
+            // Feedback describes the link: every stream adapts to it.
+            Msg::Feedback(fb) => {
+                for s in video.all() {
+                    s.feedback(&fb);
+                }
+            }
             Msg::PadDetach { idx } => ctx.input.pad_detach(idx),
-            Msg::FrameLost { .. } | Msg::KeyframeReq { .. } => {
-                stream.frame_lost(conn.rtt().max(Duration::from_millis(30)));
+            Msg::FrameLost { stream, .. } | Msg::KeyframeReq { stream } => {
+                if let Some(s) = video.stream(stream) {
+                    s.frame_lost(conn.rtt().max(Duration::from_millis(30)));
+                }
             }
             Msg::SetMode { modes } => {
                 let sharp = modes & qr_proto::msg::mode::SHARP_TEXT != 0;
-                stream.sharp.store(sharp, std::sync::atomic::Ordering::Relaxed);
+                video.set_sharp(sharp);
                 tracing::info!(sharp, "sharp-text mode");
+            }
+            // Switches a stream to another monitor, or opens one more stream
+            // (a second window).
+            Msg::SelectMonitor { stream, monitor } => {
+                let fps = video.current(stream).or(video.current(0)).map_or(ctx.args.fps, |(_, m)| m.2);
+                let Some(m) = ctx.monitors().into_iter().find(|m| m.id == monitor) else {
+                    tracing::warn!(monitor, "no such monitor");
+                    continue;
+                };
+                if let Err(e) = video.start(stream, monitor, (m.width as u32, m.height as u32, fps)).await {
+                    tracing::warn!("starting stream {stream} on monitor {monitor} failed: {e:#}");
+                }
+            }
+            Msg::StreamStop { stream } => video.stop(stream).await,
+            // A virtual display follows the client's window; a real desktop
+            // keeps its size and the client scales the picture.
+            Msg::Resize { stream, width, height, refresh } if ctx.vd.is_some() && width >= 320 && height >= 200 => {
+                let Some((_, (_, _, fps))) = video.current(stream) else { continue };
+                let fps = if refresh > 0 { refresh as u32 } else { fps };
+                let mode = (width.min(7680) as u32 & !1, height.min(4320) as u32 & !1, fps);
+                video.request_resize(stream, mode);
             }
             Msg::Bye => return Ok(()),
             other => tracing::debug!(?other, "unhandled control message"),
@@ -327,6 +315,33 @@ fn choose_encoder(ctx: &HostCtx, decoders: &[CodecCap]) -> Option<(probe::Encode
 }
 
 impl HostCtx {
+    /// The monitors a client can pick from.
+    pub fn monitors(&self) -> Vec<Monitor> {
+        if let Some(vd) = &self.vd {
+            match vd.lock().expect("lock").monitors() {
+                Ok(m) if !m.is_empty() => return m,
+                Ok(_) => tracing::warn!("the virtual display has no outputs"),
+                Err(e) => tracing::warn!("listing virtual outputs: {e:#}"),
+            }
+        }
+        let (w, h, fps) = self.display_mode(0, 0, 0);
+        vec![Monitor {
+            id: 0,
+            name: "screen".into(),
+            width: w as u16,
+            height: h as u16,
+            refresh_mhz: fps * 1000,
+            x: 0,
+            y: 0,
+            primary: true,
+        }]
+    }
+
+    /// Capture source for a monitor of a non-virtual display.
+    pub fn source_for(&self, _mon: &Monitor) -> Source {
+        self.source()
+    }
+
     pub fn source(&self) -> Source {
         match self.args.source.as_str() {
             "test" => Source::Test { pattern: "ball".into() },

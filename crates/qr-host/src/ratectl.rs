@@ -56,6 +56,10 @@ pub struct RateCtl {
     last_change: Instant,
     /// The client can't decode this fast: frame-rate ceiling until when.
     decode_cap: Option<(u32, Instant)>,
+    /// Consecutive feedback windows with a slow decoder, and the last step
+    /// the decoder caused.
+    slow_windows: u32,
+    last_decode_step: Option<Instant>,
 }
 
 pub const FPS_STEPS: [u32; 7] = [240, 144, 120, 60, 30, 15, 5];
@@ -78,6 +82,8 @@ impl RateCtl {
             base_delay: None,
             last_change: now,
             decode_cap: None,
+            slow_windows: 0,
+            last_decode_step: None,
         };
         r.fit_fps();
         r
@@ -137,12 +143,26 @@ impl RateCtl {
         }
         // A client whose decoder falls behind (more than two frame times per
         // frame) builds a backlog of latency; step the frame rate down for
-        // 3 s at a time until it keeps up.
+        // 3 s at a time until it keeps up. One slow window is a hiccup, not
+        // a backlog (3 in a row are), and after a step the queued frames
+        // take a while to drain, so steps are at least 500 ms apart.
         let frame_us = 1_000_000 / self.fps.max(1);
         if fb.decode_us > 2 * frame_us {
+            self.slow_windows += 1;
+            if let Some((_, until)) = &mut self.decode_cap {
+                *until = now + Duration::from_secs(3);
+            }
+        } else {
+            self.slow_windows = 0;
+        }
+        if self.slow_windows >= 3
+            && self.last_decode_step.is_none_or(|t| now.duration_since(t) >= Duration::from_millis(500))
+        {
             let below = FPS_STEPS.iter().copied().find(|f| *f < self.fps).unwrap_or(5);
             let cap = self.decode_cap.map_or(below, |(c, _)| c.min(below));
             self.decode_cap = Some((cap, now + Duration::from_secs(3)));
+            self.last_decode_step = Some(now);
+            self.slow_windows = 0;
         } else if self.decode_cap.is_some_and(|(_, until)| now >= until) {
             self.decode_cap = None;
         }
@@ -271,13 +291,27 @@ mod tests {
         let t0 = Instant::now();
         let mut r = RateCtl::new(Profile::Lan, limits(), t0);
         let mut f = fb(190_000, 0, 0, (0, 0, 0));
+        let ms = |n| t0 + Duration::from_millis(n);
         f.decode_us = 80_000; // 80 ms per frame at 60 fps
-        r.on_feedback(&f, t0);
-        assert_eq!(r.fps, 30);
-        r.on_feedback(&f, t0 + Duration::from_millis(50));
+        r.on_feedback(&f, ms(0));
+        assert_eq!(r.fps, 60, "one slow window is a hiccup");
+        f.decode_us = 3_000;
+        r.on_feedback(&f, ms(50));
+        f.decode_us = 80_000;
+        for t in [100, 150, 200] {
+            r.on_feedback(&f, ms(t));
+        }
+        assert_eq!(r.fps, 30, "three in a row: a backlog");
+        for t in [250, 300, 350] {
+            r.on_feedback(&f, ms(t));
+        }
+        assert_eq!(r.fps, 30, "the backlog drains before the next step");
+        for t in [750, 800, 850] {
+            r.on_feedback(&f, ms(t));
+        }
         assert_eq!(r.fps, 15, "still behind: another step down");
         f.decode_us = 3_000;
-        r.on_feedback(&f, t0 + Duration::from_secs(4));
+        r.on_feedback(&f, ms(4_000));
         assert_eq!(r.fps, 60, "back to full rate once the cap expires");
     }
 

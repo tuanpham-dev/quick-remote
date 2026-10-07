@@ -10,6 +10,9 @@
 //! wheel <dx> <dy>
 //! release
 //! pen <x> <y> <pressure> <tilt_x> <tilt_y> <flags>
+//! resize <w> <h> [refresh]     (virtual display mode)
+//! monitor <id> [stream]        (another stream opens a second picture)
+//! stopstream <stream>
 //! ```
 //!
 //! Every input event sent is written to the input trace (if open).
@@ -38,7 +41,7 @@ fn send(input: &Input, ev: InputEvent) {
     input.send(ev);
 }
 
-pub async fn run(path: &str, input: &Input) -> Result<()> {
+pub async fn run(path: &str, input: &Input, ctl: &qr_net::files::Control) -> Result<()> {
     let text = std::fs::read_to_string(path).with_context(|| format!("reading {path}"))?;
     for (n, line) in text.lines().enumerate() {
         let line = line.trim();
@@ -52,6 +55,19 @@ pub async fn run(path: &str, input: &Input) -> Result<()> {
         };
         let down = |i: usize| a.get(i) == Some(&"down");
         match cmd {
+            "resize" => {
+                qr_net::trace::event("resize");
+                ctl(qr_proto::Msg::Resize {
+                    stream: 0,
+                    width: num(0)? as u16,
+                    height: num(1)? as u16,
+                    refresh: num(2).unwrap_or(0) as u16,
+                });
+            }
+            "monitor" => {
+                ctl(qr_proto::Msg::SelectMonitor { stream: num(1).unwrap_or(0) as u8, monitor: num(0)? as u8 })
+            }
+            "stopstream" => ctl(qr_proto::Msg::StreamStop { stream: num(0)? as u8 }),
             "sleep" => tokio::time::sleep(Duration::from_millis(num(0)? as u64)).await,
             "key" => send(input, InputEvent::Key { code: num(0)? as u16, down: down(1) }),
             "tap" => {

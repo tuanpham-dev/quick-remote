@@ -7,6 +7,8 @@ pub mod decode;
 pub mod encode;
 pub mod probe;
 
+pub use gstreamer;
+
 use std::sync::OnceLock;
 
 use anyhow::Result;

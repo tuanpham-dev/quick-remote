@@ -48,7 +48,23 @@ pub struct Stats {
     pub total_ms: f32,
     /// Host capture → client playout of audio, ms (arrival + playout buffer).
     pub audio_ms: f32,
+    /// The main stream's monitor.
+    pub monitor: u8,
+    /// Extra streams by id.
+    pub streams: std::collections::BTreeMap<u8, StreamStats>,
 }
+
+/// A stream besides the main one (a second window), in `Stats::streams`.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct StreamStats {
+    pub monitor: u8,
+    pub width: u32,
+    pub height: u32,
+    pub fps: f32,
+}
+
+/// Decoded frames of streams other than 0: (stream, frame).
+pub type ExtraSink = Arc<dyn Fn(u8, DecodedFrame) + Send + Sync>;
 
 /// Per-frame timeline, client clock µs (`None` until known).
 #[derive(Debug, Clone, Copy)]
@@ -89,6 +105,10 @@ pub struct Shared {
     delays: Vec<(i64, i64)>,
     pub host: Option<HostStats>,
     audio_lat: (f64, u32),
+    /// Frames decoded per extra stream in this stats window.
+    extra_frames: std::collections::HashMap<u8, u32>,
+    /// The host's monitors.
+    pub monitors: Vec<qr_proto::Monitor>,
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize)]
@@ -121,6 +141,8 @@ pub struct Connected {
     pub ctl: qr_net::files::Control,
     /// Rumble from the host for the pad thread: (pad, strong, weak, ms).
     pub rumble: Arc<Mutex<Option<std::sync::mpsc::Sender<(u8, u16, u16, u16)>>>>,
+    /// Where extra streams' pictures go (none: they are only counted).
+    pub extra_sink: Arc<Mutex<Option<ExtraSink>>>,
 }
 
 /// Sends input: keys, buttons and text on the reliable input stream;
@@ -257,6 +279,8 @@ pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, 
         delays: Vec::new(),
         host: None,
         audio_lat: (0.0, 0),
+        extra_frames: Default::default(),
+        monitors: Vec::new(),
     }));
 
     // Wait for the session to start and the first stream to be announced.
@@ -265,6 +289,12 @@ pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, 
     while codec.is_none() {
         let m = tokio::time::timeout_at(deadline, rx.recv()).await.context("waiting for the stream")??;
         match m {
+            Msg::MonitorList { monitors } => {
+                let names: Vec<String> =
+                    monitors.iter().map(|m| format!("{}:{}:{}x{}", m.id, m.name, m.width, m.height)).collect();
+                tracing::info!(monitors = %names.join(" "), "host monitors");
+                shared.lock().expect("lock").monitors = monitors;
+            }
             Msg::SessionStart { profile, path, .. } => {
                 let mut sh = shared.lock().expect("lock");
                 sh.stats.profile = if profile == 1 { "LAN" } else { "Internet" }.into();
@@ -279,8 +309,9 @@ pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, 
                 }
                 .into();
             }
-            Msg::StreamStarted { codec: c, width, height, .. } => {
+            Msg::StreamStarted { codec: c, width, height, monitor, .. } => {
                 let mut sh = shared.lock().expect("lock");
+                sh.stats.monitor = monitor;
                 sh.stats.width = width as u32;
                 sh.stats.height = height as u32;
                 codec = Some(Codec::from_u8(c)?);
@@ -343,11 +374,32 @@ pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, 
             let Some(t) = sh.pending.remove(&f.frame_id) else {
                 return;
             };
-            sh.record(f.frame_id, &t, done, f.decode_us as i64);
+            sh.record(f.frame_id, &t, done, f.decode_us as i64, f.work_us);
             t
         };
         sink(f, times);
     })?);
+
+    // Extra streams (second windows) get their own decoders.
+    let extra_sink: Arc<Mutex<Option<ExtraSink>>> = Arc::default();
+    let (extra_tx, extra_rx) = tokio::sync::mpsc::unbounded_channel::<(u8, Option<Codec>)>();
+    let make_extra = {
+        let (decoders, ovr, sink, shared) =
+            (o.decoders.clone(), o.decoder_override.clone(), extra_sink.clone(), shared.clone());
+        move |stream: u8, codec: Codec| -> Result<Decoder> {
+            let el = ovr
+                .clone()
+                .or_else(|| decoders.iter().find(|d| d.codec == codec).map(|d| d.element.to_string()))
+                .ok_or_else(|| anyhow!("no decoder for {}", codec.name()))?;
+            let (sink, shared) = (sink.clone(), shared.clone());
+            Decoder::start(codec, &el, move |f| {
+                *shared.lock().expect("lock").extra_frames.entry(stream).or_default() += 1;
+                if let Some(s) = sink.lock().expect("lock").as_ref() {
+                    s(stream, f);
+                }
+            })
+        }
+    };
 
     let player = match &o.audio_out {
         Some(sink) => match AudioPlayer::start(sink, 2) {
@@ -385,7 +437,7 @@ pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, 
             (conn.clone(), shared.clone(), control.clone(), decoder.clone(), end_tx.clone(), player.clone());
         tasks.push(tokio::spawn(async move {
             let _mic = mic;
-            let r = recv_loop(&conn, &shared, &control, &decoder, player.as_deref()).await;
+            let r = recv_loop(&conn, &shared, &control, &decoder, player.as_deref(), extra_rx, make_extra).await;
             if let Some(p) = player {
                 p.finish();
             }
@@ -457,6 +509,7 @@ pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, 
     // Control receive loop.
     {
         let (shared, end_tx, files, ctl) = (shared.clone(), end_tx.clone(), files.clone(), ctl.clone());
+        let extra_tx = extra_tx.clone();
         tasks.push(tokio::spawn(async move {
             loop {
                 let m = rx.recv().await;
@@ -492,6 +545,33 @@ pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, 
                         sh.stats.encoder = h.encoder.clone();
                         sh.stats.parity_pct = h.parity_pct;
                         sh.host = Some(h);
+                    }
+                    Ok(Msg::StreamStarted { stream, width, height, monitor, fps, codec, .. }) if stream != 0 => {
+                        tracing::info!(stream, monitor, width, height, fps, "extra stream started");
+                        let mut sh = shared.lock().expect("lock");
+                        let st = sh.stats.streams.entry(stream).or_default();
+                        (st.monitor, st.width, st.height) = (monitor, width as u32, height as u32);
+                        drop(sh);
+                        let _ = extra_tx.send((stream, Codec::from_u8(codec).ok()));
+                    }
+                    Ok(Msg::MonitorList { monitors }) => {
+                        let names: Vec<String> =
+                            monitors.iter().map(|m| format!("{}:{}:{}x{}", m.id, m.name, m.width, m.height)).collect();
+                        tracing::info!(monitors = %names.join(" "), "host monitors");
+                        shared.lock().expect("lock").monitors = monitors;
+                    }
+                    Ok(Msg::StreamStop { stream }) => {
+                        shared.lock().expect("lock").stats.streams.remove(&stream);
+                        let _ = extra_tx.send((stream, None));
+                    }
+                    Ok(Msg::StreamStarted { width, height, monitor, fps, .. }) => {
+                        // A restarted stream (monitor switch, resize): it
+                        // opens with a keyframe that carries the new size.
+                        tracing::info!(monitor, width, height, fps, "stream restarted");
+                        let mut sh = shared.lock().expect("lock");
+                        sh.stats.monitor = monitor;
+                        sh.stats.width = width as u32;
+                        sh.stats.height = height as u32;
                     }
                     Ok(Msg::Error { text, .. }) => {
                         let _ = end_tx.send(Some(text));
@@ -551,6 +631,7 @@ pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, 
         files,
         ctl,
         rumble,
+        extra_sink,
     })
 }
 
@@ -560,17 +641,29 @@ async fn recv_loop(
     control: &AsyncMutex<FramedSend>,
     decoder: &Decoder,
     player: Option<&AudioPlayer>,
+    mut extra_rx: tokio::sync::mpsc::UnboundedReceiver<(u8, Option<Codec>)>,
+    make_extra: impl Fn(u8, Codec) -> Result<Decoder>,
 ) -> Result<()> {
     let frame_ms: f64 = 1000.0 / 60.0;
-    let mut reasm = Reassembler::new(0, Duration::from_millis((2.0 * frame_ms).max(20.0) as u64));
+    let deadline = Duration::from_millis((2.0 * frame_ms).max(20.0) as u64);
+    let mut reasm = Reassembler::new(0, deadline);
     // After a loss, deltas are useless until the next keyframe.
     let mut need_key = false;
+    // Streams besides 0: (reassembler, decoder, need_key).
+    let mut extras: std::collections::HashMap<u8, (Reassembler, Decoder, bool)> = Default::default();
     let mut tick = tokio::time::interval(Duration::from_millis(5));
     loop {
         let events = tokio::select! {
             d = conn.read_datagram() => {
                 let d: Bytes = d?;
                 match d.first() {
+                    Some(&kind::VIDEO) if d.get(1).is_some_and(|&s| s != 0) => {
+                        if let Some((r, dec, nk)) = extras.get_mut(&d[1]) {
+                            let ev = r.push(&d, qr_net::clock::base().elapsed()).unwrap_or_default();
+                            extra_events(d[1], ev, dec, nk, control).await?;
+                        }
+                        Vec::new()
+                    }
                     Some(&kind::VIDEO) => reasm.push(&d, qr_net::clock::base().elapsed()).unwrap_or_default(),
                     Some(&kind::AUDIO) => {
                         if let (Some(p), Ok(a)) = (player, AudioPacket::decode(&d)) {
@@ -587,7 +680,35 @@ async fn recv_loop(
                     _ => Vec::new(),
                 }
             }
-            _ = tick.tick() => reasm.poll(qr_net::clock::base().elapsed()),
+            Some((id, codec)) = extra_rx.recv() => {
+                // A restart keeps the decoder (the codec doesn't change); the
+                // frame numbering carries on.
+                match codec {
+                    Some(c) if !extras.contains_key(&id) => match make_extra(id, c) {
+                        Ok(dec) => {
+                            extras.insert(id, (Reassembler::new(id, deadline), dec, false));
+                        }
+                        Err(e) => tracing::warn!("stream {id}: {e:#}"),
+                    },
+                    Some(_) => {}
+                    None => {
+                        extras.remove(&id);
+                    }
+                }
+                Vec::new()
+            }
+            _ = tick.tick() => {
+                let now = qr_net::clock::base().elapsed();
+                for (id, (r, dec, nk)) in extras.iter_mut() {
+                    let ev = r.poll(now);
+                    extra_events(*id, ev, dec, nk, control).await?;
+                    let st = r.take_stats();
+                    if st != Default::default() {
+                        add_stats(&mut shared.lock().expect("lock"), &st);
+                    }
+                }
+                reasm.poll(now)
+            }
         };
         for ev in events {
             match ev {
@@ -627,17 +748,7 @@ async fn recv_loop(
         }
         let st = reasm.take_stats();
         if st != Default::default() {
-            let mut sh = shared.lock().expect("lock");
-            sh.fb.bytes_rx += st.bytes_rx as u32;
-            sh.fb.shards_rx += st.shards_rx;
-            sh.fb.shards_lost += st.shards_lost;
-            sh.fb.shards_repaired += st.shards_repaired;
-            sh.fb.frames_rx += st.frames_rx as u16;
-            sh.fb.frames_lost += st.frames_lost as u16;
-            sh.win.shards_rx += st.shards_rx;
-            sh.win.shards_lost += st.shards_lost;
-            sh.stats.fec_repaired += st.shards_repaired;
-            sh.stats.frames_lost += st.frames_lost;
+            add_stats(&mut shared.lock().expect("lock"), &st);
         }
         if let Some(e) = decoder.error() {
             bail!("decoder failed: {e}");
@@ -645,11 +756,54 @@ async fn recv_loop(
     }
 }
 
+/// Decodes an extra stream's frames (no latency bookkeeping).
+async fn extra_events(
+    stream: u8,
+    events: Vec<Event>,
+    decoder: &Decoder,
+    need_key: &mut bool,
+    control: &AsyncMutex<FramedSend>,
+) -> Result<()> {
+    for ev in events {
+        match ev {
+            Event::Frame(f) => {
+                let key = f.meta.flags & qr_proto::datagram::fflags::KEYFRAME != 0;
+                if *need_key && !key {
+                    continue;
+                }
+                *need_key = false;
+                decoder.push(f.id, &f.au, key)?;
+            }
+            Event::Lost { id } => {
+                *need_key = true;
+                decoder.flush_pending();
+                control.lock().await.send(&Msg::FrameLost { stream, frame: id }).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Adds reassembly statistics to the feedback and the stats window.
+fn add_stats(sh: &mut Shared, st: &qr_fec::Stats) {
+    sh.fb.bytes_rx += st.bytes_rx as u32;
+    sh.fb.shards_rx += st.shards_rx;
+    sh.fb.shards_lost += st.shards_lost;
+    sh.fb.shards_repaired += st.shards_repaired;
+    sh.fb.frames_rx += st.frames_rx as u16;
+    sh.fb.frames_lost += st.frames_lost as u16;
+    sh.win.shards_rx += st.shards_rx;
+    sh.win.shards_lost += st.shards_lost;
+    sh.stats.fec_repaired += st.shards_repaired;
+    sh.stats.frames_lost += st.frames_lost;
+}
+
 impl Shared {
-    fn record(&mut self, frame: u32, t: &FrameTimes, decoded: i64, decode_us: i64) {
+    fn record(&mut self, frame: u32, t: &FrameTimes, decoded: i64, decode_us: i64, work_us: u64) {
         // The slowest decode in the feedback window tells the host whether
-        // this client keeps up.
-        self.fb.decode_us = self.fb.decode_us.max(decode_us.max(0) as u32);
+        // this client keeps up (a picture held for the next frame is no
+        // sign of a slow decoder: that would hold it longer at lower rates).
+        self.fb.decode_us = self.fb.decode_us.max(work_us.min(u32::MAX as u64) as u32);
         let w = &mut self.win;
         w.frames += 1;
         if !self.clock.ready() {
@@ -720,6 +874,10 @@ impl Shared {
             s.audio_ms = (self.audio_lat.0 / self.audio_lat.1 as f64 / 1000.0) as f32;
             self.audio_lat = (0.0, 0);
         }
+        for (id, st) in s.streams.iter_mut() {
+            st.fps = self.extra_frames.remove(id).unwrap_or(0) as f32 / secs;
+        }
+        self.extra_frames.clear();
         let shards = (w.shards_rx + w.shards_lost).max(1) as f32;
         s.loss_pct = w.shards_lost as f32 / shards * 100.0;
         if w.lat_n > 0 {

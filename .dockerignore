@@ -1,0 +1,5 @@
+target/
+out/
+android/
+web/node_modules/
+.git/

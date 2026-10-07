@@ -296,6 +296,7 @@ mod tests {
             offsets: [0, (pw * ph) as usize, 0],
             strides: [pw as usize, pw as usize, 0],
             decode_us: 0,
+            work_us: 0,
         };
         let mut r = VideoRenderer::new(&device, fmt);
         r.upload(&device, &queue, &frame);
