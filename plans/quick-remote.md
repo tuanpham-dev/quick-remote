@@ -91,7 +91,7 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
   - Do: check and report each prerequisite with a fix hint: render node rw (or `sg render` works), `gst-inspect-1.0 vah264lpenc`, `/dev/uinput` rw, `unshare -rn` + veth + netem, `pkg-config` for `gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0 libpipewire-0.3 opus xkbcommon libudev`, `google-chrome`, `docker info`, `/dev/kvm` rw, weston pipewire backend present.
   - Depends on: —
   - Done when: running it lists every item with OK or the exact fix.
-- [ ] **T0.2 — one-time root setup (user-run)**
+- [x] **T0.2 — one-time root setup (user-run)**
   - Files: `scripts/setup-root.sh` (new)
   - Do: `apt install` libpipewire-0.3-dev libopus-dev libxkbcommon-dev libva-dev intel-media-va-driver-non-free evtest xdotool mesa-utils glmark2-es2 vulkan-tools xdg-desktop-portal xdg-desktop-portal-gnome mutter (for the headless Wayland real-desktop test), gstreamer1.0-libav, gstreamer1.0-pipewire. Also: udev rule `KERNEL=="uinput", GROUP="input", MODE="0660"` + `SUBSYSTEM=="input", ATTRS{name}=="QuickRemote*", MODE="0660", GROUP="input"`, `usermod -aG input,kvm,docker,render $USER`.
   - Depends on: —
@@ -221,7 +221,7 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
     - Auto-reconnect with exponential backoff (250 ms → 2 s, give up at 60 s). On connect, the host sends release-all.
   - Depends on: T1.5, T1.6, T1.7, T1.14
   - Done when: A1, A2 and A6 pass in netns.
-- [ ] **T1.16 — client audio**
+- [x] **T1.16 — client audio**
   - Files: `crates/qr-client/src/audio.rs`
   - Do: audio datagrams → jitter buffer (target 10 ms, adaptive 5–40 ms) → `opusdec` → `autoaudiosink` (or a file sink with `--audio-out file.wav` for tests). A/V sync: audio plays as soon as possible; if video is late by more than 40 ms, the overlay reports drift. Mic: `autoaudiosrc` (or `--mic-in file.wav`) → opusenc → datagrams.
   - Depends on: T1.13, T1.15
@@ -336,7 +336,7 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
     - Logs carry no payloads.
   - Depends on: T2.1, T1.6
   - Done when: unit tests for the registry and forwarding pass, and the `docker build` succeeds (or is ENV-BLOCKED without the docker group).
-- [ ] **T2.3 — punchable socket**
+- [x] **T2.3 — punchable socket** (superseded: punches and relay hellos go out on a clone of the endpoint's socket; see Phase 2 notes, A4 passes)
   - Files: `crates/qr-net/src/punch.rs`
   - Do: a quinn `AsyncUdpSocket` wrapper over tokio UDP that (a) exposes `send_raw(addr, bytes)`, (b) drops inbound packets starting with the 8-byte punch magic `QRPUNCH\0`, and (c) prepends the relay token on packets to the relay address when relaying.
   - Depends on: T1.6
@@ -541,6 +541,7 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
   - A recreated host list re-ran the auto-connect.
   - The core waited forever when the first keyframe was lost. It now asks for keyframes while waiting and after queue drops, at most every 300 ms.
   The app takes `--es connect/--es pin` extras and logs per-second stats to logcat. Hardware decode latency and the Android TV remote stay hardware gates.
+- A17b (in `vd_audio.sh`): the A/V offset is how far the picture trails the sound. Both latencies run from the host's capture timestamps on the synced clock, so the offset is video (capture → decoded) minus audio (capture → playout): −1.4 ms (6.0 vs 7.3 ms). A real flash-and-beep clip on a physical client is still to be measured. T0.2: the user ran `setup-root.sh`. The non-free Intel driver isn't available (no non-free component), so HEVC/4:4:4 on VA stays out, and the groups are active only after a re-login (`sg` meanwhile).
 - Input into the virtual display (`wlinput.rs`, `--input auto` with a vdisplay source) uses sway's virtual pointer and virtual keyboard: no uinput, no device permissions. Keys use libxkbcommon's default keymap (loaded at run time through `xkbcommon-dl`). Text is typed the `wtype` way, with a throwaway keymap of `U+XXXX` keysyms. Absolute positions add the stream's monitor origin and map over the output layout from xdg-output (wlroots reports every `wl_output` at 0,0). `tests/e2e/vd_input.sh` checks in a GTK window on the second monitor, through a second stream: A19-vd (Q key, "héllo 漢字" exact), A20-vd (1000 × +1 → +1000) and clicks landing at the right place, 2/2. The first borrowed character is not dropped on this path. Pads and pen still go through uinput (`wayland+uinput` when `/dev/uinput` is writable), but headless sway has no libinput backend, so a uinput pen won't reach apps in the virtual display yet. The second window sends pointer motion and clicks on its own stream.
 - A10 regression fixed: the decode-time backoff (commit 41f0d44) read openh264's one-frame hold as a slow decoder. That locked A10 at 5–15 fps and about 0.8 Mbit/s (the previous commit fails A10b too). The client now reports decoding work (`work_us`): a picture released by the next push counts from that push, and a backlog still counts in full. The host steps down only after 3 slow windows in a row, at most every 500 ms. A10 then passes 3/3 at a steady 60 fps and 5–6 Mbit/s with 100% of seconds in band, and A25 (GPU) and A8 (p50 6.7 ms) still pass.
 

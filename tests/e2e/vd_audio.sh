@@ -42,8 +42,11 @@ d = sys.argv[1]
 w = wave.open(f"{d}/out.wav")
 out = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(float)
 rms = float(np.sqrt((out ** 2).mean())) if len(out) else 0.0
-lat = [json.loads(l)["audio_ms"] for l in open(f"{d}/vd_audio.json")][3:]
-lat = [x for x in lat if x > 0]
+rows = [json.loads(l) for l in open(f"{d}/vd_audio.json")][3:]
+lat = [r["audio_ms"] for r in rows if r["audio_ms"] > 0]
+# A/V offset: both latencies run from the host's capture timestamps on the
+# synced clock, so their difference is how far the picture trails the sound.
+vid = [r["total_ms"] for r in rows if r["total_ms"] > 0]
 # What the app recorded against what the client's microphone sent:
 # normalized cross-correlation of 2 s of the input at every lag (FFT).
 mic = wave.open(f"{d}/mic.wav")
@@ -57,11 +60,14 @@ if len(r) > len(seg):
     c2 = np.cumsum(np.concatenate([[0.0], r * r]))
     energy = np.sqrt(np.maximum(c2[len(seg):len(seg) + len(xc)] - c2[: len(xc)], 1e-9))
     best = float(np.max(xc / (energy * np.linalg.norm(seg))))
-print(f"out_rms={rms:.0f} audio_ms={np.median(lat) if lat else -1:.1f} rec_s={len(r)/48000:.1f} corr={best:.3f}")
+av = (np.median(vid) - np.median(lat)) if (vid and lat) else 999
+print(f"out_rms={rms:.0f} audio_ms={np.median(lat) if lat else -1:.1f} video_ms={np.median(vid) if vid else -1:.1f} av_ms={av:.1f} rec_s={len(r)/48000:.1f} corr={best:.3f}")
 PY
 cat "$LOGDIR/vd_audio-summary.txt"
-v() { sed -E "s/.*$1=([-0-9.]+).*/\1/" "$LOGDIR/vd_audio-summary.txt"; }
+v() { sed -E "s/.*[ ^]$1=([-0-9.]+).*/\1/; s/^$1=([-0-9.]+).*/\1/" "$LOGDIR/vd_audio-summary.txt"; }
 check A17-vd "an app's click track reaches the client (rms $(v out_rms)), host capture → playout $(v audio_ms) ms (≤ 40)" \
 	python3 -c "import sys; sys.exit(0 if $(v out_rms) > 200 and 0 < $(v audio_ms) <= 40 else 1)"
+check A17b-vd "A/V offset: the picture trails the sound by $(v av_ms) ms (video $(v video_ms) ms, audio $(v audio_ms) ms from capture; within ±40)" \
+	python3 -c "import sys; sys.exit(0 if abs($(v av_ms)) <= 40 else 1)"
 check A18-vd "the client's microphone WAV is what an app in the display records (correlation $(v corr), ≥ 0.9)" \
 	python3 -c "import sys; sys.exit(0 if $(v corr) >= 0.9 else 1)"
