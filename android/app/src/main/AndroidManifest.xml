@@ -24,7 +24,7 @@
         <activity
             android:name=".SessionActivity"
             android:exported="false"
-            android:configChanges="orientation|screenSize|keyboard|keyboardHidden|navigation|screenLayout|uiMode"
+            android:configChanges="orientation|screenSize|smallestScreenSize|density|keyboard|keyboardHidden|navigation|screenLayout|uiMode|touchscreen|layoutDirection|colorMode|fontScale"
             android:screenOrientation="sensorLandscape"
             android:windowSoftInputMode="adjustResize" />
     </application>

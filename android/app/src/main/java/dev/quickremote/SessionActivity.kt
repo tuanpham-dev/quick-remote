@@ -49,6 +49,10 @@ class SessionActivity : Activity(), SurfaceHolder.Callback {
         root.addView(surface, FrameLayout.LayoutParams(-1, -1, Gravity.CENTER))
         root.addView(overlay, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START))
         setContentView(root)
+        // Refit on every size change (first layout, rotation, split screen).
+        window.decorView.addOnLayoutChangeListener { _, l, t, r, b, ol, ot, or_, ob ->
+            if (r - l != or_ - ol || b - t != ob - ot) fitSurface()
+        }
         window.insetsController?.let {
             it.hide(WindowInsets.Type.systemBars())
             it.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
@@ -57,6 +61,7 @@ class SessionActivity : Activity(), SurfaceHolder.Callback {
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {
+        android.util.Log.i("QuickRemote", "surface ready")
         video = VideoDecoder(h, holder.surface, stats).also { it.start() }
         audio = AudioPlayer(h).also { it.start() }
     }
@@ -70,8 +75,11 @@ class SessionActivity : Activity(), SurfaceHolder.Callback {
     }
 
     override fun onDestroy() {
+        android.util.Log.i("QuickRemote", "session view closed (finishing=$isFinishing, config change=$isChangingConfigurations)")
         audio?.running = false
-        Native.close(h)
+        // A configuration change recreates this activity with the same
+        // session handle (in its intent): keep the session for it.
+        if (!isChangingConfigurations) Native.close(h)
         super.onDestroy()
     }
 
@@ -84,7 +92,10 @@ class SessionActivity : Activity(), SurfaceHolder.Callback {
                 "rumble" -> rumble(j.getInt("idx"), j.getInt("strong"), j.getInt("weak"), j.getInt("ms"))
                 "clipboard" -> (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
                     .setPrimaryClip(ClipData.newPlainText("QuickRemote", j.getString("text")))
-                "error", "ended" -> { overlay.visibility = View.VISIBLE; overlay.text = j.optString("text"); ui.postDelayed({ finish() }, 2500) }
+                "error", "ended" -> {
+                    android.util.Log.i("QuickRemote", "session ${j.getString("t")}: ${j.optString("text")}")
+                    overlay.visibility = View.VISIBLE; overlay.text = j.optString("text"); ui.postDelayed({ finish() }, 2500)
+                }
             }
         }
         if (overlay.visibility == View.VISIBLE && !isFinishing) {
@@ -96,6 +107,9 @@ class SessionActivity : Activity(), SurfaceHolder.Callback {
 
     private fun fitSurface() {
         val v = window.decorView
+        // Not laid out yet (a zero-size view never gets a surface): the
+        // layout listener fits it once the window has a size.
+        if (v.width == 0 || v.height == 0) return
         val s = minOf(v.width.toFloat() / streamW, v.height.toFloat() / streamH)
         surface.layoutParams = FrameLayout.LayoutParams((streamW * s).toInt(), (streamH * s).toInt(), Gravity.CENTER)
     }

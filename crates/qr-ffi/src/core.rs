@@ -77,6 +77,11 @@ pub struct Handle {
     ctl: mpsc::UnboundedSender<Msg>,
     input: mpsc::UnboundedSender<InputEvent>,
     video: Queue<VideoFrame>,
+    /// The app's decoder must restart at a keyframe: none delivered yet, or
+    /// frames were dropped from the queue (it fell behind or started late).
+    video_need_key: AtomicBool,
+    /// When a keyframe was last asked for (µs, rate limit).
+    key_asked_us: std::sync::atomic::AtomicI64,
     audio: Queue<Vec<u8>>,
     events: Mutex<VecDeque<String>>,
     ended: AtomicBool,
@@ -92,8 +97,23 @@ pub struct Handle {
 }
 
 impl Handle {
+    /// The next frame for the app's decoder. Until it has a keyframe (at the
+    /// start, and after frames were dropped), deltas are skipped and a
+    /// keyframe is requested, at most every 300 ms.
     pub fn next_video(&self, timeout_ms: u64) -> Option<VideoFrame> {
-        self.video.pop(Duration::from_millis(timeout_ms))
+        let end = std::time::Instant::now() + Duration::from_millis(timeout_ms);
+        loop {
+            let left = end.saturating_duration_since(std::time::Instant::now());
+            let f = self.video.pop(left)?;
+            if f.keyframe {
+                self.video_need_key.store(false, Ordering::Relaxed);
+                return Some(f);
+            }
+            if !self.video_need_key.load(Ordering::Relaxed) {
+                return Some(f);
+            }
+            self.want_keyframe();
+        }
     }
 
     pub fn next_audio(&self, timeout_ms: u64) -> Option<Vec<u8>> {
@@ -124,7 +144,17 @@ impl Handle {
     }
 
     pub fn request_keyframe(&self) {
+        tracing::info!("asking the host for a keyframe");
         self.control(Msg::KeyframeReq { stream: 0 });
+    }
+
+    /// `request_keyframe`, at most every 300 ms (one is on its way).
+    fn want_keyframe(&self) {
+        let now = now_us() as i64;
+        if now - self.key_asked_us.load(Ordering::Relaxed) > 300_000 {
+            self.key_asked_us.store(now, Ordering::Relaxed);
+            self.request_keyframe();
+        }
     }
 
     pub fn decoded(&self, _id: u32, decode_us: u64) {
@@ -299,6 +329,8 @@ async fn start(
         ctl,
         input,
         video: Queue::new(8),
+        video_need_key: AtomicBool::new(true),
+        key_asked_us: std::sync::atomic::AtomicI64::new(0),
         audio: Queue::new(32),
         events: Mutex::default(),
         ended: AtomicBool::new(false),
@@ -408,6 +440,9 @@ async fn start(
                         Event::Frame(f) => {
                             let key = f.meta.flags & fflags::KEYFRAME != 0;
                             if need_key && !key {
+                                // Waiting for a keyframe (the first one may
+                                // have been lost): ask.
+                                h.want_keyframe();
                                 continue;
                             }
                             need_key = false;
@@ -426,7 +461,8 @@ async fn start(
                             // A dropped frame breaks the reference chain.
                             if !h.video.push(frame) {
                                 need_key = true;
-                                h.request_keyframe();
+                                h.video_need_key.store(true, Ordering::Relaxed);
+                                h.want_keyframe();
                             }
                         }
                         Event::Lost { id } => {

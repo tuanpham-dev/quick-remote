@@ -37,7 +37,8 @@ class VideoDecoder(private val h: Long, private val surface: Surface, private va
         val info = MediaCodec.BufferInfo()
         while (running) {
             val n = Native.nextVideo(h, buf, meta, 20)
-            if (n < 0) break
+            if (n < 0) { android.util.Log.i("QuickRemote", "video ended"); break }
+            if (n > 0 && codec == null && meta[1] != 1L) android.util.Log.i("QuickRemote", "video: a delta before any keyframe")
             if (n > 0) {
                 val keyframe = meta[1] == 1L
                 val m = when (meta[2].toInt()) {
@@ -78,6 +79,7 @@ class VideoDecoder(private val h: Long, private val surface: Surface, private va
     }
 
     private fun configure(m: String, w: Int, hgt: Int) {
+        android.util.Log.i("QuickRemote", "video decoder for $m ${w}x$hgt")
         codec?.run { stop(); release() }
         val f = MediaFormat.createVideoFormat(m, w, hgt)
         f.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
@@ -158,16 +160,19 @@ class Stats {
     @Volatile var fps = 0f
     @Volatile var latencyMs = 0f
 
+    @Volatile var total = 0L
+
     @Synchronized fun frame(id: Long, nowUs: Long) {
         frames++
+        total++
         captureUs.remove(id)?.let { if (it > 0) { latSum += nowUs - it; latN++ } }
         val t = System.nanoTime()
         if (t - windowStart >= 1_000_000_000L) {
             val secs = (t - windowStart) / 1e9f
             fps = frames / secs
             latencyMs = if (latN > 0) latSum / latN / 1000f else 0f
-            android.util.Log.i("QuickRemote", "stats fps=%.1f latency_ms=%.1f decode_ms=%.1f codec=%s".format(
-                fps, latencyMs, decodeUs / 1000f, codec))
+            android.util.Log.i("QuickRemote", "stats fps=%.1f latency_ms=%.1f decode_ms=%.1f frames=%d codec=%s".format(
+                fps, latencyMs, decodeUs / 1000f, total, codec))
             frames = 0; latSum = 0; latN = 0; windowStart = t
         }
     }

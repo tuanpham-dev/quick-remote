@@ -35,7 +35,8 @@ class MainActivity : Activity() {
         root.addView(Button(this).apply { text = "Refresh"; setOnClickListener { discover() } })
         setContentView(ScrollView(this).apply { addView(root) })
         // Tests and shortcuts: am start … --es connect <addr> [--es pin <pin>]
-        val target = intent.getStringExtra("connect")
+        // Only on first creation: a recreated activity keeps its intent.
+        val target = intent.getStringExtra("connect").takeIf { b == null }
         if (target != null) connect(target, intent.getStringExtra("pin")) else discover()
     }
 
