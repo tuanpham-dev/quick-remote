@@ -37,7 +37,9 @@ cleanup() {
 	for p in "${NODE_PID[@]}"; do
 		ns=$(readlink "/proc/$p/ns/net" 2>/dev/null) || continue
 		for q in /proc/[0-9]*; do
-			[[ "$(readlink "$q/ns/net" 2>/dev/null)" == "$ns" ]] && kill -9 "${q#/proc/}" 2>/dev/null
+			# A process may exit between the check and the kill: under
+			# `set -e` that failed kill made the whole run exit 1.
+			[[ "$(readlink "$q/ns/net" 2>/dev/null)" == "$ns" ]] && { kill -9 "${q#/proc/}" 2>/dev/null || true; }
 		done
 	done
 	for p in "${NODE_PID[@]}"; do kill "$p" 2>/dev/null || true; done

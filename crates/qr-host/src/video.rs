@@ -99,21 +99,22 @@ impl Video {
         let mon = mons.iter().find(|m| m.id == monitor).or(mons.first()).cloned().context("no monitor")?;
         let (mut w, mut h, fps) = mode;
         let mut opened = None;
-        let source = if let Some(vd) = &self.ctx.vd {
+        let source = if let Some(socket) = self.ctx.screencopy_socket() {
             // Stop the old capture first: the mode change would only
             // confuse it.
             drop(self.streams.lock().expect("lock").remove(&id));
-            let socket = {
-                let vd = vd.lock().expect("lock");
-                if (w, h) != (mon.width as u32, mon.height as u32) && w > 0 && h > 0 {
-                    vd.set_mode(&mon.name, w, h, fps)?;
-                }
-                vd.wayland_socket()
-            };
+            // Only the virtual display changes mode for the client.
+            if let Some(vd) = &self.ctx.vd
+                && (w, h) != (mon.width as u32, mon.height as u32)
+                && w > 0
+                && h > 0
+            {
+                vd.lock().expect("lock").set_mode(&mon.name, w, h, fps)?;
+            }
             let name = mon.name.clone();
             let o = tokio::task::spawn_blocking(move || crate::screencopy::open(&socket, &name))
                 .await?
-                .context("capturing the virtual display")?;
+                .context("capturing the Wayland output")?;
             (w, h) = (o.width, o.height);
             let s = match o.format {
                 crate::screencopy::Format::Raw(f) => Source::App { format: f.into() },

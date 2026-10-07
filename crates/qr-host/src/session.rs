@@ -338,10 +338,26 @@ fn choose_encoder(ctx: &HostCtx, decoders: &[CodecCap]) -> Option<(probe::Encode
 }
 
 impl HostCtx {
+    /// The Wayland socket captured through screencopy: the virtual
+    /// display's, or a wlroots desktop's.
+    pub fn screencopy_socket(&self) -> Option<std::path::PathBuf> {
+        match &self.vd {
+            Some(vd) => Some(vd.lock().expect("lock").wayland_socket()),
+            None => self.wl_socket.clone(),
+        }
+    }
+
     /// The monitors a client can pick from.
     pub fn monitors(&self) -> Vec<Monitor> {
         if let Some(m) = &self.mutter {
             return m.monitors();
+        }
+        if let Some(socket) = &self.wl_socket {
+            match crate::screencopy::monitors(socket, self.args.fps) {
+                Ok(m) if !m.is_empty() => return m,
+                Ok(_) => tracing::warn!("the Wayland desktop has no outputs"),
+                Err(e) => tracing::warn!("listing the Wayland outputs: {e:#}"),
+            }
         }
         if let Some(vd) = &self.vd {
             match vd.lock().expect("lock").monitors() {

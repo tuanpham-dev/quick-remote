@@ -147,6 +147,9 @@ pub struct HostCtx {
     pub vd: Option<Mutex<vdisplay::VirtualDisplay>>,
     /// The GNOME desktop's remote-desktop session, for `--source mutter`.
     pub mutter: Option<mutter::MutterSession>,
+    /// A wlroots desktop's Wayland socket (screencopy and virtual input),
+    /// for `--source wayland`.
+    pub wl_socket: Option<PathBuf>,
 }
 
 impl HostCtx {
@@ -161,8 +164,10 @@ impl HostCtx {
     /// The mode a stream starts at: a virtual display takes the client's
     /// request (up to 4K120); real desktops keep their own size.
     pub fn display_mode(&self, w: u16, h: u16, refresh: u16) -> (u32, u32, u32) {
-        if let Some(m) = self.mutter.as_ref().and_then(|m| m.monitors().into_iter().next()) {
-            return (m.width as u32, m.height as u32, self.args.fps);
+        if self.mutter.is_some() || self.wl_socket.is_some() {
+            if let Some(m) = self.monitors().into_iter().next() {
+                return (m.width as u32, m.height as u32, self.args.fps);
+            }
         }
         if self.vd.is_some() {
             let (dw, dh) = self.args.size();
@@ -271,12 +276,33 @@ async fn main() -> Result<()> {
         }
         None => None,
     };
-    let mutter = if args.source == "mutter" {
-        Some(mutter::MutterSession::start().await.context("starting a GNOME remote-desktop session")?)
+    // A Wayland desktop: wlroots compositors through screencopy and the
+    // virtual input protocols, GNOME through mutter's remote-desktop API.
+    let mut wl_socket = None;
+    let mut use_mutter = args.source == "mutter";
+    if let Some(rest) = args.source.strip_prefix("wayland") {
+        let name = rest.strip_prefix(':').map(str::to_string).or_else(|| std::env::var("WAYLAND_DISPLAY").ok());
+        let name = name.context("no Wayland display: set WAYLAND_DISPLAY or use --source wayland:<socket>")?;
+        let socket = if name.starts_with('/') {
+            PathBuf::from(name)
+        } else {
+            PathBuf::from(std::env::var("XDG_RUNTIME_DIR").context("XDG_RUNTIME_DIR is not set")?).join(name)
+        };
+        if screencopy::supported(&socket) {
+            tracing::info!(socket = %socket.display(), "wlroots desktop");
+            wl_socket = Some(socket);
+        } else {
+            use_mutter = true;
+        }
+    }
+    let mutter = if use_mutter {
+        Some(mutter::MutterSession::start().await.context(
+            "this desktop offers neither wlr-screencopy nor GNOME's remote desktop (KDE needs the portal, not yet supported)",
+        )?)
     } else {
         None
     };
-    let vd_socket = vd.as_ref().map(|d| d.lock().expect("lock").wayland_socket());
+    let vd_socket = vd.as_ref().map(|d| d.lock().expect("lock").wayland_socket()).or(wl_socket.clone());
     let injector = match &mutter {
         // GNOME: input through the remote-desktop session (pads and pen
         // through uinput where allowed).
@@ -323,7 +349,7 @@ async fn main() -> Result<()> {
             }
         });
     }
-    let ctx = Arc::new(HostCtx { args, encoders, input: input::Input::new(injector), relays, web_peers, vd, mutter });
+    let ctx = Arc::new(HostCtx { args, encoders, input: input::Input::new(injector), relays, web_peers, vd, mutter, wl_socket });
     let active: Arc<tokio::sync::Mutex<Option<Active>>> = Arc::default();
     while let Some(incoming) = ep.accept().await {
         let (ctx, id, keystore, pin, limiter, active, name) =

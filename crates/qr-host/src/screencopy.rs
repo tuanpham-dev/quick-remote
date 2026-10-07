@@ -395,6 +395,7 @@ impl Opened {
                 Target::Shm(b) => &b.buffer,
                 Target::Gpu { buffer, .. } => buffer,
             };
+            let was_full = full;
             if full {
                 f.copy(wl);
             } else {
@@ -402,9 +403,15 @@ impl Opened {
             }
             full = false;
             while !self.state.ready && !self.state.failed && !stop.load(Ordering::Relaxed) {
-                let wait = keepalive.saturating_sub(last_sent.elapsed()).min(Duration::from_millis(100));
+                let wait = if was_full {
+                    Duration::from_millis(100)
+                } else {
+                    keepalive.saturating_sub(last_sent.elapsed()).min(Duration::from_millis(100))
+                };
                 dispatch_for(&mut self.queue, &mut self.state, wait)?;
-                if !self.state.ready && last_sent.elapsed() >= keepalive {
+                // Nothing changed for `keepalive`: give up waiting for damage
+                // and take a full copy instead (which is waited out).
+                if !was_full && !self.state.ready && last_sent.elapsed() >= keepalive {
                     full = true;
                     break;
                 }
@@ -436,4 +443,94 @@ impl Opened {
         }
         Ok(())
     }
+}
+
+/// A compositor's outputs as monitors (names from wl_output, layout from
+/// xdg-output), in the compositor's order.
+pub fn monitors(socket: &Path, fps: u32) -> Result<Vec<qr_proto::Monitor>> {
+    use wayland_protocols::xdg::xdg_output::zv1::client::zxdg_output_manager_v1::ZxdgOutputManagerV1;
+    use wayland_protocols::xdg::xdg_output::zv1::client::zxdg_output_v1::{self as xdg_output, ZxdgOutputV1};
+
+    #[derive(Default)]
+    struct Out {
+        name: String,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+    }
+    #[derive(Default)]
+    struct St {
+        outputs: Vec<(wl_output::WlOutput, Out)>,
+        mgr: Option<ZxdgOutputManagerV1>,
+    }
+    impl Dispatch<wl_registry::WlRegistry, ()> for St {
+        fn event(st: &mut Self, reg: &wl_registry::WlRegistry, ev: wl_registry::Event, _: &(), _: &Connection, qh: &QueueHandle<Self>) {
+            if let wl_registry::Event::Global { name, interface, version } = ev {
+                match interface.as_str() {
+                    "wl_output" if version >= 4 => {
+                        let i = st.outputs.len();
+                        st.outputs.push((reg.bind(name, 4, qh, i), Out::default()));
+                    }
+                    "zxdg_output_manager_v1" => st.mgr = Some(reg.bind(name, version.min(3), qh, ())),
+                    _ => {}
+                }
+            }
+        }
+    }
+    impl Dispatch<wl_output::WlOutput, usize> for St {
+        fn event(st: &mut Self, _: &wl_output::WlOutput, ev: wl_output::Event, i: &usize, _: &Connection, _: &QueueHandle<Self>) {
+            if let wl_output::Event::Name { name } = ev {
+                st.outputs[*i].1.name = name;
+            }
+        }
+    }
+    impl Dispatch<ZxdgOutputV1, usize> for St {
+        fn event(st: &mut Self, _: &ZxdgOutputV1, ev: xdg_output::Event, i: &usize, _: &Connection, _: &QueueHandle<Self>) {
+            let o = &mut st.outputs[*i].1;
+            match ev {
+                xdg_output::Event::LogicalPosition { x, y } => (o.x, o.y) = (x, y),
+                xdg_output::Event::LogicalSize { width, height } => (o.w, o.h) = (width, height),
+                _ => {}
+            }
+        }
+    }
+    delegate_noop!(St: ZxdgOutputManagerV1);
+
+    let conn = Connection::from_socket(UnixStream::connect(socket).with_context(|| format!("connecting to {}", socket.display()))?)?;
+    let mut queue = conn.new_event_queue();
+    let qh = queue.handle();
+    let _registry = conn.display().get_registry(&qh, ());
+    let mut st = St::default();
+    queue.roundtrip(&mut st)?;
+    let mgr = st.mgr.clone().context("the compositor has no xdg-output")?;
+    let xdg: Vec<ZxdgOutputV1> = st.outputs.iter().enumerate().map(|(i, (o, _))| mgr.get_xdg_output(o, &qh, i)).collect();
+    queue.roundtrip(&mut st)?;
+    drop(xdg);
+    Ok(st
+        .outputs
+        .iter()
+        .enumerate()
+        .map(|(i, (_, o))| qr_proto::Monitor {
+            id: i as u8,
+            name: o.name.clone(),
+            width: o.w as u16,
+            height: o.h as u16,
+            refresh_mhz: fps * 1000,
+            x: o.x,
+            y: o.y,
+            primary: i == 0,
+        })
+        .collect())
+}
+
+/// Whether the compositor at `socket` offers wlr-screencopy.
+pub fn supported(socket: &Path) -> bool {
+    let Ok(stream) = UnixStream::connect(socket) else { return false };
+    let Ok(conn) = Connection::from_socket(stream) else { return false };
+    let mut queue = conn.new_event_queue();
+    let qh = queue.handle();
+    let _registry = conn.display().get_registry(&qh, ());
+    let mut state = State::default();
+    queue.roundtrip(&mut state).is_ok() && state.manager.is_some()
 }
