@@ -378,6 +378,27 @@ impl HostCtx {
                 Err(e) => tracing::warn!("listing virtual outputs: {e:#}"),
             }
         }
+        // Windows: the desktop's monitors.
+        #[cfg(windows)]
+        if self.args.source.starts_with("d3d11") {
+            let m = qr_win::monitors::monitors();
+            if !m.is_empty() {
+                return m
+                    .iter()
+                    .enumerate()
+                    .map(|(i, w)| Monitor {
+                        id: i as u8,
+                        name: w.name.clone(),
+                        width: w.width as u16,
+                        height: w.height as u16,
+                        refresh_mhz: self.args.fps * 1000,
+                        x: w.x,
+                        y: w.y,
+                        primary: w.primary,
+                    })
+                    .collect();
+            }
+        }
         // An X display: its RandR monitors.
         if let Some(display) = self.args.source.strip_prefix("x11:") {
             match x11_monitors(display, self.args.fps) {
@@ -401,6 +422,12 @@ impl HostCtx {
 
     /// Capture source for a monitor of a non-virtual display.
     pub fn source_for(&self, mon: &Monitor) -> Source {
+        #[cfg(windows)]
+        if self.args.source.starts_with("d3d11")
+            && let Some(w) = qr_win::monitors::monitors().get(mon.id as usize)
+        {
+            return Source::D3d11Handle { handle: w.handle };
+        }
         if let Some(node) = self.mutter.as_ref().and_then(|m| m.node(mon.id)) {
             return Source::PipeWire { fd: None, node };
         }

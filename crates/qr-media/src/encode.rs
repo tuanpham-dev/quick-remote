@@ -36,6 +36,9 @@ pub enum Source {
     X11 { display: String, rect: Option<(i32, i32, u32, u32)> },
     /// Windows desktop capture (`d3d11screencapturesrc`).
     D3d11 { monitor: i32 },
+    /// Windows desktop capture of one monitor by its HMONITOR (exact even
+    /// when DXGI's output order differs from the monitor list's).
+    D3d11Handle { handle: u64 },
 }
 
 #[derive(Debug, Clone)]
@@ -139,6 +142,9 @@ pub fn source_desc(s: &Source, w: u32, h: u32, fps: u32) -> String {
                 "ximagesrc display-name={display} use-damage=false show-pointer=true{r} ! video/x-raw,framerate={fps}/1"
             )
         }
+        Source::D3d11Handle { handle } => format!(
+            "d3d11screencapturesrc monitor-handle={handle} show-cursor=true capture-api=wgc ! video/x-raw(memory:D3D11Memory),framerate={fps}/1"
+        ),
         Source::D3d11 { monitor } => format!(
             "d3d11screencapturesrc monitor-index={monitor} show-cursor=true capture-api=wgc ! video/x-raw(memory:D3D11Memory),framerate={fps}/1"
         ),
@@ -283,7 +289,10 @@ impl Encoder {
                     format!("videoconvert n-threads=4 ! video/x-raw,format={fmt}")
                 }
             }
-            (Family::Nv | Family::Qsv | Family::Amf | Family::MediaFoundation, Source::D3d11 { .. }) => {
+            (
+                Family::Nv | Family::Qsv | Family::Amf | Family::MediaFoundation,
+                Source::D3d11 { .. } | Source::D3d11Handle { .. },
+            ) => {
                 format!("d3d11convert ! video/x-raw(memory:D3D11Memory),format={fmt}")
             }
             _ => format!("videoconvert n-threads=4 ! video/x-raw,format={fmt}"),
@@ -414,6 +423,7 @@ impl Encoder {
         })
     }
 
+    #[cfg(target_os = "linux")]
     /// Feeds one GPU frame to a [`Source::DmaNv12`] pipeline. The frame's
     /// buffer is busy until the encoder lets go of it ([`DmaFrame::busy`]).
     pub fn push_dma(&self, frame: &DmaFrame) -> Result<()> {
@@ -515,6 +525,7 @@ impl Drop for Encoder {
     }
 }
 
+#[cfg(target_os = "linux")]
 /// GStreamer VA's own DMA-BUF allocator (libgstva, loaded at run time).
 /// Memories must come from it: the VA encoder frees a picture only when it
 /// can find a VA display on the input memory, and with a plain DMA-BUF
@@ -553,6 +564,7 @@ fn va_dmabuf_allocator() -> Option<gstreamer_allocators::DmaBufAllocator> {
     a.map(|p| unsafe { from_glib_none(p as *mut gstreamer_allocators::ffi::GstDmaBufAllocator) })
 }
 
+#[cfg(target_os = "linux")]
 /// An NV12 picture in a DMA-BUF (both planes in one buffer), wrapped once so
 /// the encoder's import of it is cached across frames.
 pub struct DmaFrame {
@@ -563,6 +575,7 @@ pub struct DmaFrame {
     strides: [i32; 2],
 }
 
+#[cfg(target_os = "linux")]
 impl DmaFrame {
     /// Takes ownership of `fd` (`size` bytes; planes at `offsets` with
     /// `strides`).

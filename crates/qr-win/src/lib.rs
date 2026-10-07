@@ -74,6 +74,8 @@ pub fn xusb_buttons(b: u32) -> u16 {
 
 #[cfg(windows)]
 pub mod inject;
+#[cfg(windows)]
+pub mod monitors;
 
 #[cfg(test)]
 mod tests {

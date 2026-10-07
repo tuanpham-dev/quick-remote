@@ -406,22 +406,22 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
   - Depends on: —
   - Done when: a decision is recorded here.
   - **Decision (2026-10-03, user):** ViGEmBus. The user installs it once, and QuickRemote loads `ViGEmClient.dll` at run time. If the driver is missing, the host logs that and continues without gamepads.
-- [ ] **T4.2 — cross-compile setup**
+- [x] **T4.2 — cross-compile setup**
   - Files: `scripts/xwin-check.sh`, `.cargo/config.toml`
   - Do: `cargo install cargo-xwin`. GStreamer MSVC dev libraries come from the official `gstreamer-1.0-devel-msvc-x86_64` package, extracted with `msiextract` or `7z`; `PKG_CONFIG_PATH` points at them for the target.
   - Depends on: T1.1
   - Done when: `scripts/xwin-check.sh` checks `qr-host` and `qr-client` for Windows.
-- [ ] **T4.3 — Windows capture, encode, audio**
+- [x] **T4.3 — Windows capture, encode, audio**
   - Files: `crates/qr-host/src/capture/windows.rs`, `crates/qr-media/src/probe.rs`
   - Do: `d3d11screencapturesrc capture-api=wgc monitor-index=N show-cursor=false` (falling back to DXGI) → `d3d11convert` → `nvh264enc`/`qsvh264enc`/`amfh264enc` or the HEVC/AV1 variants with D3D11 memory caps. Audio from `wasapi2src loopback=true low-latency=true`. Monitor list via `DXGI EnumOutputs`.
   - Depends on: T4.2
   - Done when: it compiles for Windows; hardware gate A30.
-- [ ] **T4.4 — Windows input**
+- [x] **T4.4 — Windows input**
   - Files: `crates/qr-host/src/input/windows.rs`
   - Do: `SendInput` with scancodes (`KEYEVENTF_SCANCODE`), relative and absolute mouse (`MOUSEEVENTF_VIRTUALDESK`), `InjectSyntheticPointerInput` with `PT_PEN` for pressure and tilt, and gamepads per T4.1.
   - Depends on: T4.1, T4.2
   - Done when: it compiles; hardware gate A30.
-- [ ] **T4.5 — Windows client specifics**
+- [x] **T4.5 — Windows client specifics**
   - Files: `crates/qr-client/src/pen.rs`, `crates/qr-client/src/audio.rs`
   - Do: WM_POINTER pen input through a winit raw window hook; GStreamer `d3d11h264dec`, `d3d11h265dec` and `d3d11av1dec` for decode; `wasapi2sink` low-latency for audio.
   - Depends on: T4.2
@@ -542,6 +542,7 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
   - The core waited forever when the first keyframe was lost. It now asks for keyframes while waiting and after queue drops, at most every 300 ms.
   The app takes `--es connect/--es pin` extras and logs per-second stats to logcat. Hardware decode latency and the Android TV remote stay hardware gates.
 - A17b (in `vd_audio.sh`): the A/V offset is how far the picture trails the sound. Both latencies run from the host's capture timestamps on the synced clock, so the offset is video (capture → decoded) minus audio (capture → playout): −1.4 ms (6.0 vs 7.3 ms). A real flash-and-beep clip on a physical client is still to be measured. T0.2: the user ran `setup-root.sh`. The non-free Intel driver isn't available (no non-free component), so HEVC/4:4:4 on VA stays out, and the groups are active only after a re-login (`sg` meanwhile).
+- T4.2–T4.5 (compile checks; running them is a hardware gate: A26/A30). `scripts/xwin-check.sh` checks `qr-host` and `qr-client` for x86_64-pc-windows-msvc with cargo-xwin, using GStreamer 1.26.6's MSVC development package for pkg-config (fetched once into `~/.cache/quickremote`). Both are clean. To get there, the Linux-only dependencies moved under a Linux target section, and the virtual display, mutter and screencopy got non-Linux stand-ins (`nolinux.rs`) that can't be started, so shared code compiles unchanged. Windows hosts list their monitors (`EnumDisplayMonitors`, origins relative to the virtual screen so they're never negative) and capture each by HMONITOR (`d3d11screencapturesrc monitor-handle`, exact even when DXGI's order differs). Input is anchored at the virtual-screen origin. The Windows client takes pen pressure, tilt, eraser and barrel from `WM_POINTER` messages through a window subclass (winit has none).
 - Input into the virtual display (`wlinput.rs`, `--input auto` with a vdisplay source) uses sway's virtual pointer and virtual keyboard: no uinput, no device permissions. Keys use libxkbcommon's default keymap (loaded at run time through `xkbcommon-dl`). Text is typed the `wtype` way, with a throwaway keymap of `U+XXXX` keysyms. Absolute positions add the stream's monitor origin and map over the output layout from xdg-output (wlroots reports every `wl_output` at 0,0). `tests/e2e/vd_input.sh` checks in a GTK window on the second monitor, through a second stream: A19-vd (Q key, "héllo 漢字" exact), A20-vd (1000 × +1 → +1000) and clicks landing at the right place, 2/2. The first borrowed character is not dropped on this path. Pads and pen still go through uinput (`wayland+uinput` when `/dev/uinput` is writable), but headless sway has no libinput backend, so a uinput pen won't reach apps in the virtual display yet. The second window sends pointer motion and clicks on its own stream.
 - A10 regression fixed: the decode-time backoff (commit 41f0d44) read openh264's one-frame hold as a slow decoder. That locked A10 at 5–15 fps and about 0.8 Mbit/s (the previous commit fails A10b too). The client now reports decoding work (`work_us`): a picture released by the next push counts from that push, and a backlog still counts in full. The host steps down only after 3 slow windows in a row, at most every 500 ms. A10 then passes 3/3 at a steady 60 fps and 5–6 Mbit/s with 100% of seconds in band, and A25 (GPU) and A8 (p50 6.7 ms) still pass.
 

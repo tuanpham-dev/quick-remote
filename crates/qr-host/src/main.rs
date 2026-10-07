@@ -2,22 +2,34 @@
 //! with paired clients.
 
 mod clipboard;
+#[cfg(target_os = "linux")]
 mod gpuconv;
 mod input;
 mod media;
+#[cfg(target_os = "linux")]
 mod mutter;
 mod outbox;
+#[cfg(target_os = "linux")]
 mod portal;
 mod ratectl;
+#[cfg(target_os = "linux")]
 mod screencopy;
 mod session;
 mod stream;
 #[cfg(target_os = "linux")]
+#[cfg(target_os = "linux")]
 mod uinput;
+#[cfg(target_os = "linux")]
 mod vdisplay;
 mod video;
 mod web;
+#[cfg(target_os = "linux")]
 mod wlinput;
+// The Linux-only sources' stand-ins elsewhere.
+#[cfg(not(target_os = "linux"))]
+mod nolinux;
+#[cfg(not(target_os = "linux"))]
+use nolinux::{mutter, screencopy, vdisplay};
 
 use std::net::SocketAddr;
 use std::path::PathBuf;

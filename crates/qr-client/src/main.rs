@@ -3,6 +3,8 @@
 mod app;
 mod keymap;
 mod pads;
+#[cfg(windows)]
+mod pen;
 mod render;
 mod script;
 mod session;

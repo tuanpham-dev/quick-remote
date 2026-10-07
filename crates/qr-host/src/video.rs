@@ -181,7 +181,10 @@ impl Video {
             o.run(Duration::from_millis(500), move |frame| {
                 let r = match frame {
                     crate::screencopy::Frame::Packed(p) => enc.push(p),
+                    #[cfg(target_os = "linux")]
                     crate::screencopy::Frame::Dma(d) => enc.push_dma(d),
+                    #[cfg(not(target_os = "linux"))]
+                    crate::screencopy::Frame::Dma(d) => match *d {},
                 };
                 if let Err(e) = r {
                     tracing::debug!("frame not taken: {e:#}");

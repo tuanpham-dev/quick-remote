@@ -259,6 +259,7 @@ pub mod xtest {
     }
 
     /// The size of `display`'s first screen.
+    #[cfg(target_os = "linux")]
     pub fn screen_size(display: &str) -> Result<(u16, u16)> {
         let (conn, screen) = x11rb::connect(Some(display))?;
         let s = &conn.setup().roots[screen];
@@ -455,9 +456,17 @@ pub fn with_devices(main: Box<dyn Injector>, name: &'static str) -> Box<dyn Inje
     }
 }
 
+/// `main` alone: no uinput here.
+#[cfg(not(target_os = "linux"))]
+pub fn with_devices(main: Box<dyn Injector>, _name: &'static str) -> Box<dyn Injector> {
+    main
+}
+
 /// Builds the injector named by `--input`. `vd_socket`: the virtual
 /// display's Wayland socket, when it is the source.
 pub fn open(spec: &str, source: &str, vd_socket: Option<&std::path::Path>) -> Result<Box<dyn Injector>> {
+    #[cfg(not(target_os = "linux"))]
+    let _ = vd_socket;
     let (kind, arg) = spec.split_once(':').unwrap_or((spec, ""));
     Ok(match kind {
         "none" => Box::new(NoInput),
@@ -516,9 +525,11 @@ mod win {
         /// `source` is `d3d11:<monitor index>`; the monitor's rectangle maps
         /// stream pixels onto the virtual desktop.
         pub fn new(_source: &str) -> Self {
-            // The primary monitor at the origin until monitor enumeration
-            // (T4.3) supplies the rectangle.
-            Win(WinInjector::new(Rect { x: 0, y: 0, w: 0, h: 0 }))
+            // Positions arrive as stream pixels plus the monitor's origin
+            // (`Input::place`), and monitor origins are relative to the
+            // virtual screen's corner: anchor there.
+            let (x, y) = qr_win::monitors::virtual_origin();
+            Win(WinInjector::new(Rect { x, y, w: 0, h: 0 }))
         }
     }
 

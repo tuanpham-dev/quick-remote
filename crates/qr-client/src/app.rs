@@ -25,6 +25,9 @@ use crate::session::{self, ConnectOpts, Connected, FrameTimes};
 
 pub enum UserEvent {
     Frame,
+    /// A pen sample (Windows: winit has no pressure or tilt).
+    #[cfg(windows)]
+    Pen(crate::pen::PenSample),
     /// A picture for the second window.
     ExtraFrame,
     Discovery(Discovery),
@@ -765,6 +768,15 @@ impl ApplicationHandler<UserEvent> for App {
             None,
             None,
         ));
+        #[cfg(windows)]
+        {
+            let p = self.proxy.clone();
+            if let Err(e) = crate::pen::hook(&window, move |s| {
+                let _ = p.send_event(UserEvent::Pen(s));
+            }) {
+                tracing::warn!("pen input is off: {e:#}");
+            }
+        }
         self.gpu = Some(Gpu { instance, surface, device, queue, config, video, egui });
         self.window = Some(window.clone());
         window.request_redraw();
@@ -776,6 +788,29 @@ impl ApplicationHandler<UserEvent> for App {
                 if let Some(w) = &self.window {
                     w.request_redraw();
                 }
+            }
+            #[cfg(windows)]
+            UserEvent::Pen(p) => {
+                // Window pixels to stream pixels × 16 (sub-pixel).
+                if let (Some(gpu), Some(s)) = (self.gpu.as_ref(), &self.session)
+                    && let Some((pw, ph)) = gpu.video.size()
+                {
+                    let (ox, oy, w, h) = fit(gpu.config.width, gpu.config.height, pw, ph);
+                    let sx = (p.x as f32 - ox) / w * pw as f32;
+                    let sy = (p.y as f32 - oy) / h * ph as f32;
+                    if sx >= 0.0 && sy >= 0.0 && sx < pw as f32 && sy < ph as f32 {
+                        s.input.send(InputEvent::Pen {
+                            stream: 0,
+                            x: (sx * 16.0) as u32,
+                            y: (sy * 16.0) as u32,
+                            pressure: p.pressure,
+                            tilt_x: p.tilt_x,
+                            tilt_y: p.tilt_y,
+                            flags: p.flags,
+                        });
+                    }
+                }
+                return;
             }
             UserEvent::ExtraFrame => {
                 if let Some(x) = &self.extra {

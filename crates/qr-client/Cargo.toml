@@ -27,3 +27,12 @@ egui-winit = "0.36"
 pollster = "0.4"
 bytemuck = "1"
 gilrs = "0.11"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_UI_Input_Pointer",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }
