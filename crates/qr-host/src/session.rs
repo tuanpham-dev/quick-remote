@@ -112,6 +112,26 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
     };
     ctx.input.reset();
     let dgram_task = tokio::spawn(crate::media::datagram_loop(ctx.clone(), conn.clone()));
+    // The client reports every 50 ms. Half a second of silence is a stalled
+    // link (QUIC rides out a few seconds): let go of held keys and buttons
+    // rather than leave them auto-repeating until it comes back.
+    let heard = Arc::new(std::sync::Mutex::new(std::time::Instant::now()));
+    let watchdog = {
+        let (ctx, heard) = (ctx.clone(), heard.clone());
+        tokio::spawn(async move {
+            let mut stalled = false;
+            let mut tick = tokio::time::interval(Duration::from_millis(100));
+            loop {
+                tick.tick().await;
+                let silent = heard.lock().expect("lock").elapsed() > Duration::from_millis(500);
+                if silent && !stalled {
+                    tracing::info!("the client went quiet: releasing held input");
+                    ctx.input.release_all();
+                }
+                stalled = silent;
+            }
+        })
+    };
     let files = qr_net::files::Files::new(conn.clone(), ctx.files_dir(), 2);
     let uni_task = tokio::spawn(uni_streams(ctx.clone(), conn.clone(), files.clone(), ctl.clone()));
     let outbox_task = tokio::spawn(crate::outbox::run(ctx.outbox_dir(), files.clone(), ctl.clone()));
@@ -177,7 +197,8 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
         })
     };
     let result =
-        control_loop(&ctx, &conn, &mut control_rx, &control_tx, &video, &files, &ctl, clipboard.as_ref()).await;
+        control_loop(&ctx, &conn, &mut control_rx, &control_tx, &video, &files, &ctl, clipboard.as_ref(), &heard).await;
+    watchdog.abort();
     ctl_writer.abort();
     rumble_task.abort();
     outbox_task.abort();
@@ -199,9 +220,11 @@ async fn control_loop(
     files: &Arc<qr_net::files::Files>,
     ctl: &qr_net::files::Control,
     clipboard: Option<&crate::clipboard::Clipboard>,
+    heard: &std::sync::Mutex<std::time::Instant>,
 ) -> Result<()> {
     loop {
         let m = rx.recv().await?;
+        *heard.lock().expect("lock") = std::time::Instant::now();
         if files.on_control(&m, ctl) {
             continue;
         }

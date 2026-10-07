@@ -184,7 +184,7 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
     - Teardown: process group, plus `PR_SET_PDEATHSIG`.
     - GPU access: when the render node is not rw but `sg render` works, re-exec self under `sg render`.
   - Done when: `qr-host vdisplay --size 1920x1080@60` brings up sway, and a ScreenCast portal session on the private bus yields a PipeWire node with DMA-BUF formats.
-- [ ] **T1.12 — capture → encode wiring, zero copy**
+- [x] **T1.12 — capture → encode wiring, zero copy**
   - Files: `crates/qr-media/src/capture.rs`, `crates/qr-host/src/capture/portal.rs`, `crates/qr-host/src/stream.rs`
   - Do:
     - `capture/portal.rs`: an ashpd ScreenCast session (source = monitor, cursor = embedded) on the given D-Bus. It returns the PipeWire fd and node id. T1.28 reuses it for real Wayland desktops.
@@ -193,7 +193,7 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
   - Depends on: T1.10, T1.11, T1.4, T1.6
   - Done when: A13's trace (`GST_DEBUG=GST_PERFORMANCE:5` + caps log) shows DMABuf memory from source to encoder.
 
-- [ ] **T1.13 — host audio and virtual mic**
+- [x] **T1.13 — host audio and virtual mic**
   - Files: `crates/qr-media/src/audio.rs`, `crates/qr-host/src/audio.rs`
   - Do:
     - In the private PipeWire, load a null sink `qr-out` (default sink) and a virtual source `qr-mic`.
@@ -203,7 +203,7 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
   - Done when: a tone played in the session is recorded by the client (A17), and a WAV pushed into the mic is recorded on the host (A18).
 
 #### Milestone 1c — native client
-- [ ] **T1.14 — client decode + present**
+- [x] **T1.14 — client decode + present**
   - Files: `crates/qr-media/src/decode.rs`, `crates/qr-client/src/{main.rs,render.rs,video.rs,shaders/yuv.wgsl}`
   - Do:
     - `appsrc ! parse ! dec ! appsink` (hardware first, from the probe), NV12 output, decode time measured.
@@ -212,7 +212,7 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
     - Present time is stamped after `queue.submit` + `present()`.
   - Depends on: T1.9
   - Done when: the client shows a `videotestsrc` stream from the host and logs per-frame decode and present times.
-- [ ] **T1.15 — host list, pairing UI, session lifecycle**
+- [x] **T1.15 — host list, pairing UI, session lifecycle**
   - Files: `crates/qr-client/src/{ui.rs,session.rs,hosts.rs}`, `crates/qr-host/src/{main.rs,session.rs,pairing_ui.rs}`
   - Do:
     - Client UI is drawn with egui (egui-wgpu): "On this network", "Paired", "Add host by ID", a PIN dialog, and errors with the spec §7 wording.
@@ -228,7 +228,7 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
   - Done when: A17 and A18 pass.
 
 #### Milestone 1d — input
-- [ ] **T1.17 — client input capture**
+- [x] **T1.17 — client input capture**
   - Files: `crates/qr-client/src/input.rs`
   - Do:
     - Keys by winit `PhysicalKey` → evdev code table.
@@ -239,7 +239,7 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
     - Hotkeys from spec §7.
   - Depends on: T1.15
   - Done when: unit tests pass for the keymap, and coalescing keeps relative delta sums exact (A20 logic).
-- [ ] **T1.18 — host input injection (virtual display)**
+- [x] **T1.18 — host input injection (virtual display)**
   - Files: `crates/qr-host/src/input/{mod.rs,xtest.rs,uinput.rs,keymap.rs}`
   - Do:
     - Trait `Injector { key, button, abs, rel, wheel, text, release_all }`.
@@ -250,14 +250,14 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
     - Host-requested relative mode: watch XFixes cursor visibility and grabs; when the cursor is hidden and the pointer is grabbed, send `SetMode{relative}`.
   - Depends on: T1.11
   - Done when: A19, A20 and A23 pass (`xdotool`/`xinput test` on the host side record the events).
-- [ ] **T1.19 — gamepads**
+- [x] **T1.19 — gamepads**
   - Files: `crates/qr-client/src/pads.rs`, `crates/qr-host/src/input/pad.rs`
   - Do:
     - Client: gilrs, up to 4 pads. On attach it sends `PadAttach{idx, kind}`. State snapshots (buttons bitmask, 6 axes i16) go on change and every 100 ms, as datagrams with a sequence number, plus attach and detach on the reliable stream.
     - Host: uinput device mimicking an Xbox 360 pad (vendor 0x045e, product 0x028e, BTN_SOUTH…, ABS_X/Y/RX/RY/Z/RZ, HAT0X/Y) with FF_RUMBLE. Rumble effects are forwarded as `Rumble{idx, strong, weak, ms}` and the client plays them through gilrs force feedback.
   - Depends on: T1.17, T1.18
   - Done when: A21 passes; the client side is driven by a uinput test pad on the client namespace when one is available, otherwise by `--fake-pad` scripted input.
-- [ ] **T1.20 — pen**
+- [x] **T1.20 — pen**
   - Files: `crates/qr-client/src/pen.rs`, `crates/qr-host/src/input/pen.rs`
   - Do:
     - Client: winit has no tablet events, so read Linux tablets directly through evdev (`ABS_PRESSURE`, `ABS_TILT_X/Y`, `BTN_TOOL_RUBBER`) when the window is focused; Windows via WM_POINTER (Phase 4). `--fake-pen` emits a scripted sweep.
@@ -294,7 +294,7 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
     - `FrameLost` → force IDR, at most one per RTT.
   - Depends on: T1.12, T1.15
   - Done when: A10 and A11 pass in netns.
-- [ ] **T1.25 — sharp-text mode**
+- [x] **T1.25 — sharp-text mode**
   - Files: `crates/qr-host/src/stream.rs`, `crates/qr-media/src/encode.rs`
   - Do: when `SetMode{sharp}` is on and an encoder with `chroma444` exists, rebuild the pipeline with Y444 caps. Otherwise, run still detection (no damage for 300 ms, from PipeWire buffer flags or frame-hash equality) and send one refresh frame at QP 18. Toggle from the client hotkey T.
   - Depends on: T1.24
@@ -528,6 +528,7 @@ Build QuickRemote from scratch in `/works/quick-remote`: a Rust remote desktop w
 - T1.12 zero copy (2026-10-07): sway copies each damaged frame on the GPU into a GBM buffer we allocated (screencopy's linux-dmabuf offer). A GLES 3 shader (`gpuconv.rs`, EGL on the GBM platform) writes BT.709 NV12 into a Y-tiled DMA-BUF, and the VA encoder reads it as `memory:DMABuf` (`Source::DmaNv12`). No pixel touches the CPU. Two driver/library problems needed workarounds. Mesa's GBM crashes allocating NV12 with Y-tiling, so the NV12 layout is hand-built in one Y-tiled R8 buffer (luma padded to 32 rows, then chroma). GStreamer 1.26's VA encoder never frees a picture whose input memory isn't from its own allocator (`gst_va_encode_picture_free` returns early without a VA display), so encoding stopped after 4 frames. The memories now come from libgstva's DMA-BUF allocator (loaded at run time). Results, capture → decoded on one machine: 1600×900@60 p50 8.4 ms (was 11 ms through shared memory); **1920×1080@120: 120 fps, p50 9.9 ms, p95 12.6 ms**; capture plus conversion is 0.2 ms plus about 1.3 ms of GPU work. 4K60 runs at only 13 fps: decode on the client takes 59 ms (VA download to system memory plus copies), which trips the decode backoff, and encode takes 26 ms with host and client sharing one iGPU. Next on that front: zero-copy decode → render in the client. The shared-memory path remains as a fallback (`QR_VD_CAPTURE=shm`, or automatically when any GPU step fails).
 - T1.13 (2026-10-07): the virtual display's PipeWire gets a null sink `qr-out` (default) and a loopback microphone: the host plays into `qr-mic-in`, and apps record from `qr-mic`, the default source. A stream can't play into a source node, and the first try ended up in the speakers. pipewire-pulse runs too, for PulseAudio apps. WirePlumber's hardware monitors are off, so the machine's sound card stays out. The host captures `qr-out`'s monitor through an fd connection to the display's PipeWire (`pipewiresrc fd=`). Audio capture pipelines run on the system clock: pipewiresrc had made the display graph's clock the pipeline clock, and that clock starts at its own zero, which made the latency read 5.6 s. `tests/e2e/vd_audio.sh`: A17-vd (an app's click track through pipewire-pulse; host capture → client playout 7.4 ms) and A18-vd (client microphone WAV → app recording, correlation 0.984), 2/2. A17's flash-and-beep A/V offset isn't measured yet.
 - A13/A14 (`tests/e2e/vd_3d.sh`): vkcube in the virtual display streams at 60 fps through zero-copy capture. The display takes the client's requested 2560×1440@120 and then a resize to 1920×1200@60. At 2560×1440@120 the stream reaches only 47 fps on this machine, with sway, the conversion, encode and decode sharing one iGPU.
+- A6 (`tests/e2e/a6.sh`, 2/2): a 3 s link outage doesn't end the QUIC session (5 s idle timeout, 1 s keepalives), so the input stream never "broke" and a held key stayed down, auto-repeating. The host now releases held keys and buttons once the client has been silent for 500 ms (clients report every 50 ms). Measured: the key is released 0.5 s into the outage, and video resumes 1 s after the link returns, with no PIN.
 - Input into the virtual display (`wlinput.rs`, `--input auto` with a vdisplay source) uses sway's virtual pointer and virtual keyboard: no uinput, no device permissions. Keys use libxkbcommon's default keymap (loaded at run time through `xkbcommon-dl`). Text is typed the `wtype` way, with a throwaway keymap of `U+XXXX` keysyms. Absolute positions add the stream's monitor origin and map over the output layout from xdg-output (wlroots reports every `wl_output` at 0,0). `tests/e2e/vd_input.sh` checks in a GTK window on the second monitor, through a second stream: A19-vd (Q key, "héllo 漢字" exact), A20-vd (1000 × +1 → +1000) and clicks landing at the right place, 2/2. The first borrowed character is not dropped on this path. Pads and pen still go through uinput (`wayland+uinput` when `/dev/uinput` is writable), but headless sway has no libinput backend, so a uinput pen won't reach apps in the virtual display yet. The second window sends pointer motion and clicks on its own stream.
 - A10 regression fixed: the decode-time backoff (commit 41f0d44) read openh264's one-frame hold as a slow decoder. That locked A10 at 5–15 fps and about 0.8 Mbit/s (the previous commit fails A10b too). The client now reports decoding work (`work_us`): a picture released by the next push counts from that push, and a backlog still counts in full. The host steps down only after 3 slow windows in a row, at most every 500 ms. A10 then passes 3/3 at a steady 60 fps and 5–6 Mbit/s with 100% of seconds in band, and A25 (GPU) and A8 (p50 6.7 ms) still pass.
 
