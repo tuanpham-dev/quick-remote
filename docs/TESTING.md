@@ -86,9 +86,21 @@ It asks for the PIN the first time. Hotkeys are **Ctrl+Alt+Shift** plus:
 | F | fullscreen |
 | S | stats overlay (fps, bitrate, latency split) |
 | T | sharp-text mode (4:4:4, for reading and code) |
+| V | Display menu (resolution, pixel ratio, monitor, view) |
+| + / − / 0 | zoom in, zoom out, back to 100% (Ctrl+wheel zooms too) |
 | N | next host monitor in this window |
 | W | a second window on another monitor (again: close it) |
 | Q | disconnect |
+
+Resizing the window resizes the remote desktop 300 ms after you stop (on the
+virtual display, KDE and GNOME; X11 desktops keep their size and the picture is
+fitted). The Display menu switches to a fixed resolution, sets the pixel ratio
+(the desktop's UI scale follows it), picks a virtual monitor of the client's own
+or the real monitor on KDE/GNOME, and sets the view: **Fit** (shrinks, never
+enlarges), **Fill window** or **100%**. When zoomed in, the picture pans as the
+pointer nears an edge. Settings are kept in `display.json` next to the client's
+keys. A dropped connection reconnects by itself (after 1, 2, 4, 8, then every
+10 seconds).
 
 Drop a file on the window to send it to the host (it lands in
 `~/Downloads/QuickRemote`). Files put in `~/QuickRemote/Outbox` on the host come
@@ -101,6 +113,18 @@ not supported). The page certificate is self-signed: accept the warning once.
 Enter the PIN, then click **Start audio**. Hotkeys are Ctrl+Alt+Shift with M, S,
 F and Q, as above.
 
+- **Display** (bottom bar): Follow window or a fixed resolution (presets or
+  custom, with refresh rate), pixel ratio, Virtual or Real monitor, and Fit /
+  Fill window / 100%. Kept per browser.
+- **Zoom:** the − / + buttons, Ctrl+wheel, or pinch; drag with two fingers to pan.
+- **Fullscreen** (F or the button) captures browser shortcuts such as Ctrl+T;
+  hold **Escape** for a second to leave it.
+- **Touch screens:** tap = click, long press or two-finger tap = right click,
+  three-finger tap = middle click, two-finger drag = scroll, four-finger tap
+  or ⌨ = keyboard, with a strip of Esc, Tab, arrows and sticky Ctrl/Alt/Super.
+- The page pauses the video while the tab is hidden, and reconnects by itself
+  when the connection drops.
+
 ### Android
 
 ```
@@ -110,11 +134,17 @@ adb install quickremote.apk
 Or copy the APK to the phone and open it. Hosts on the same Wi-Fi are listed;
 otherwise type `address:9450`. It asks for the PIN the first time.
 
-- **One finger:** a trackpad (move the pointer). A tap is a click; a tap with two fingers is a right click.
-- **Two-finger drag:** scroll.
-- **Three-finger tap:** keyboard.
-- **Back:** disconnect.
-- **Ctrl+Alt+F1** on a hardware keyboard shows stats; **Ctrl+Alt+F2** switches to direct touch.
+- **One finger:** a trackpad (move the pointer), or direct touch (Display → Touch). A tap is a click.
+- **Long press** or **two-finger tap:** right click. **Three-finger tap:** middle click.
+- **Two-finger drag:** scroll (pans when zoomed in). **Pinch:** zoom.
+- **Four-finger tap** or the **⌨** button: keyboard, with a strip of Esc, Tab,
+  arrows, Home/End/PgUp/PgDn and sticky Ctrl/Alt/Super (tap Ctrl, then a key).
+- **Display** button: follow the screen (rotating the phone reshapes the remote
+  desktop) or a fixed resolution, pixel ratio, monitor, view mode, touch mode.
+- **Zoom %** button: back to 100%.
+- **Back:** hides the keyboard, else disconnects.
+- **Ctrl+Alt+F1** on a hardware keyboard shows stats; **Ctrl+Alt+F2** switches touch mode.
+- In the background the host stops sending video; a dropped connection reconnects by itself.
 - **Gamepads and a stylus** work when connected to the phone.
 
 ## 4. Over the internet (optional)
@@ -141,6 +171,9 @@ and goes through the relay otherwise.
 - **Clipboard:** copy and paste both ways, text and a screenshot.
 - **Files:** drag a large file onto the window, and use the Outbox in the other direction.
 - **Multi-monitor:** N and W, if the host has more than one screen.
+- **Resize and zoom:** resize the client window (or rotate the phone) and watch
+  the remote desktop follow; try a fixed resolution, 2× pixel ratio, Fill and 100%,
+  and zoom in and pan.
 - **Monitor changes:** change the host's resolution or rotate a screen while
   connected. The picture should come back within about 2 seconds.
 - **Weak networks:** Wi-Fi, or a phone hotspot (the bitrate should adapt).
@@ -162,6 +195,10 @@ stats overlay showed (fps, latency).
 - **Text outside the keyboard layout:** on KDE, characters the host's keyboard layout lacks
   (é on a US layout, CJK) are skipped. On GNOME they're entered by Unicode code point,
   which most apps accept.
+- **KDE without a screen:** KWin's headless mode can't add a virtual monitor; the
+  host uses the real one and the Display settings say so. A headless Plasma
+  session has a single 1280×720 mode, so resolution changes there show a note.
+- **X11 desktops** keep their own size; the picture is fitted to the window.
 - **Windows:** the Windows host and client compile, but are not packaged or tested yet.
 - **4K60:** not reached when the host and client share one integrated GPU; it needs real
   hardware on both ends.

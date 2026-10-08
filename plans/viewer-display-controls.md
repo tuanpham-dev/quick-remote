@@ -143,7 +143,7 @@ Clients choose the remote desktop's size (follow window / fixed), sharpness (pix
 **Goal:** everything green and shipped to the test package.
 **Checkpoint:** `tests/e2e/run.sh phase1` all PASS; `scripts/package.sh` builds; `docs/TESTING.md` updated.
 
-- [ ] **T16 — Suite, docs, package**
+- [x] **T16 — Suite, docs, package**
   - Files: `tests/e2e/run.sh`, `docs/TESTING.md`, `plans/quick-remote.md`
   - Do: add the new scripts to phase1; describe the Display popover, gestures and keyboard strip in TESTING.md; plan notes; rebuild the package; restart the live test host from it.
   - Depends on: T1–T15
