@@ -135,13 +135,17 @@ pub struct Limit {
 }
 
 impl Limit {
-    pub fn new(codec: qr_proto::Codec, client: &qr_proto::msg::CodecCap) -> Self {
-        let (w, h, mbs) = match codec {
+    pub fn new(enc: &qr_media::probe::EncoderInfo, client: &qr_proto::msg::CodecCap) -> Self {
+        let (w, h, mbs) = match enc.codec {
             qr_proto::Codec::H264 => (4096, 4096, 36_864),
             _ => (8192, 4352, 139_264),
         };
-        let cap = |ours: u32, theirs: u16| if theirs > 0 { ours.min(theirs as u32) } else { ours };
-        Self { width: cap(w, client.max_width), height: cap(h, client.max_height), mbs }
+        let cap = |ours: u32, theirs: u32| if theirs > 0 { ours.min(theirs) } else { ours };
+        Self {
+            width: cap(cap(w, enc.max_width), client.max_width as u32),
+            height: cap(cap(h, enc.max_height), client.max_height as u32),
+            mbs,
+        }
     }
 
     /// `r` shrunk to fit, its scale lowered by as much so the desktop keeps
@@ -435,7 +439,12 @@ async fn kde_real(
 mod tests {
     use super::*;
     use qr_proto::Codec;
+    use qr_media::probe::{EncoderInfo, Family};
     use qr_proto::msg::CodecCap;
+
+    fn enc(codec: Codec, max: u32) -> EncoderInfo {
+        EncoderInfo { element: "x", codec, family: Family::X264, hw: true, chroma444: false, max_width: max, max_height: max }
+    }
 
     fn req(width: u16, height: u16, scale_pct: u16) -> Request {
         Request { width, height, refresh: 60, scale_pct, target: 0 }
@@ -444,7 +453,7 @@ mod tests {
     #[test]
     fn fits_requests_to_the_codec_keeping_the_desktop_size() {
         let cap = CodecCap { codec: Codec::H264, hw: true, max_width: 0, max_height: 0, chroma444: false };
-        let h264 = Limit::new(Codec::H264, &cap);
+        let h264 = Limit::new(&enc(Codec::H264, 16384), &cap);
         // Within limits: unchanged.
         assert_eq!(h264.fit(req(2548, 1320, 200)), (req(2548, 1320, 200), None));
         // A 2560×1285 fullscreen window at 2×: too many macroblocks.
@@ -458,7 +467,10 @@ mod tests {
         assert!((r.width as f64 / r.height as f64 - 5120.0 / 2570.0).abs() < 0.01);
         // The client's decoder limit counts too.
         let small = CodecCap { max_width: 1920, max_height: 1080, ..cap };
-        let (r, _) = Limit::new(Codec::H265, &small).fit(req(3840, 2160, 100));
+        let (r, _) = Limit::new(&enc(Codec::H265, 16384), &small).fit(req(3840, 2160, 100));
         assert!(r.width <= 1920 && r.height <= 1080 && r.scale_pct == 50, "{r:?}");
+        // And the encoder's: H.265 on a 4096-wide GPU takes 5K at 4096 wide.
+        let (r, _) = Limit::new(&enc(Codec::H265, 4096), &cap).fit(req(5120, 2570, 200));
+        assert!(r.width <= 4096 && r.width >= 4070 && r.scale_pct == 159, "{r:?}");
     }
 }

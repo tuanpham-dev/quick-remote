@@ -62,7 +62,7 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
     };
 
     // The largest picture a display request may ask for.
-    let limit = crate::display::Limit::new(enc.codec, &cap);
+    let limit = crate::display::Limit::new(&enc, &cap);
     let profile = path_class(&conn, &ctx.web_peers);
     let mode = ctx.display_mode(want_width, want_height, want_refresh);
     tracing::info!(client = %client_name, ?profile, encoder = enc.element, ?mode, "session start");

@@ -389,7 +389,7 @@ async fn main() -> Result<()> {
     println!("LISTEN {addr}");
     println!("PIN {}", pin.lock().expect("lock"));
     for e in &encoders {
-        tracing::info!(element = e.element, codec = e.codec.name(), hw = e.hw, "encoder");
+        tracing::info!(element = e.element, codec = e.codec.name(), hw = e.hw, max = format!("{}x{}", e.max_width, e.max_height), "encoder");
     }
 
     let vd = match args.source.strip_prefix("vdisplay") {

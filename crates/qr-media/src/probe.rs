@@ -35,6 +35,31 @@ pub struct EncoderInfo {
     pub family: Family,
     pub hw: bool,
     pub chroma444: bool,
+    /// The largest picture it takes (from its input caps; Intel's VA
+    /// encoders stop at 4096×4096 on older GPUs).
+    pub max_width: u32,
+    pub max_height: u32,
+}
+
+/// The largest width and height an element's input caps allow.
+fn caps_max(el: &str) -> (u32, u32) {
+    let mut max = (0u32, 0u32);
+    let Some(f) = gst::ElementFactory::find(el) else { return (16384, 16384) };
+    for t in f.static_pad_templates() {
+        if t.direction() != gst::PadDirection::Sink {
+            continue;
+        }
+        for st in t.caps().iter() {
+            let get = |k: &str| match st.value(k) {
+                Ok(v) => v.get::<gst::IntRange<i32>>().map(|r| r.max() as u32).or_else(|_| v.get::<i32>().map(|v| v as u32)).ok(),
+                Err(_) => None,
+            };
+            if let (Some(w), Some(h)) = (get("width"), get("height")) {
+                max = (max.0.max(w), max.1.max(h));
+            }
+        }
+    }
+    if max.0 == 0 || max.1 == 0 { (16384, 16384) } else { (max.0.min(16384), max.1.min(16384)) }
 }
 
 /// Candidates, best first within each codec.
@@ -142,7 +167,8 @@ pub fn encoders() -> Result<Vec<EncoderInfo>> {
         let chroma444 = run(&encode_desc(el, codec, family, "Y444"), "out", Duration::from_secs(5))
             .and_then(|s| s.first().and_then(|s| s.caps().map(|c| c.to_string())))
             .is_some_and(|c| c.contains("4:4:4") || c.contains("444"));
-        out.push(EncoderInfo { element: el, codec, family, hw, chroma444 });
+        let (max_width, max_height) = caps_max(el);
+        out.push(EncoderInfo { element: el, codec, family, hw, chroma444, max_width, max_height });
     }
     Ok(out)
 }
@@ -241,7 +267,7 @@ mod tests {
     use super::*;
 
     fn enc(element: &'static str, codec: Codec, hw: bool) -> EncoderInfo {
-        EncoderInfo { element, codec, family: Family::X264, hw, chroma444: false }
+        EncoderInfo { element, codec, family: Family::X264, hw, chroma444: false, max_width: 4096, max_height: 4096 }
     }
 
     fn cap(codec: Codec, hw: bool) -> CodecCap {
