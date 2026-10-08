@@ -47,6 +47,10 @@ pub struct Video {
     /// (debounced).
     restart: tokio::sync::Mutex<()>,
     resize_gen: AtomicU32,
+    /// The client asked for no video (it is hidden).
+    paused: AtomicBool,
+    /// Desktop scale per stream, percent (100 = none), for input mapping.
+    scale_pct: Mutex<BTreeMap<u8, u16>>,
 }
 
 impl Video {
@@ -71,6 +75,34 @@ impl Video {
             next_frame: Default::default(),
             restart: Default::default(),
             resize_gen: Default::default(),
+            paused: Default::default(),
+            scale_pct: Default::default(),
+        }
+    }
+
+    /// Stops (true) or resumes (false) all video; resuming sends keyframes.
+    pub fn pause(&self, on: bool) {
+        self.paused.store(on, Ordering::Relaxed);
+        for s in self.all() {
+            s.encoder.pause(on);
+            if !on {
+                s.encoder.force_keyframe();
+            }
+        }
+    }
+
+    /// Stream `id`'s desktop scale, percent.
+    pub fn scale_pct(&self, id: u8) -> u16 {
+        self.scale_pct.lock().expect("lock").get(&id).copied().unwrap_or(100)
+    }
+
+    pub fn set_scale_pct(&self, id: u8, pct: u16) {
+        self.scale_pct.lock().expect("lock").insert(id, pct);
+        // Input mapping follows at once (the stream may not restart).
+        if let Some((m, _)) = self.current(id)
+            && let Some(mon) = self.ctx.monitors().into_iter().find(|x| x.id == m)
+        {
+            self.ctx.input.set_origin(id, (mon.x, mon.y), pct as f64 / 100.0);
         }
     }
 
@@ -202,7 +234,8 @@ impl Video {
                 }
             })
         });
-        self.ctx.input.set_origin(id, (mon.x, mon.y));
+        self.ctx.input.set_origin(id, (mon.x, mon.y), self.scale_pct(id) as f64 / 100.0);
+        stream.encoder.pause(self.paused.load(Ordering::Relaxed));
         self.streams
             .lock()
             .expect("lock")

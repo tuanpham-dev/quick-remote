@@ -293,6 +293,14 @@ context.modules = [
         Ok(())
     }
 
+    /// Sets an output's scale (100 = none): apps keep their apparent size
+    /// at a higher resolution.
+    pub fn set_scale(&self, output: &str, scale_pct: u16) -> Result<()> {
+        let s = format!("{:.2}", scale_pct.clamp(50, 400) as f64 / 100.0);
+        self.swaymsg(&["output", output, "scale", &s])?;
+        Ok(())
+    }
+
     /// Adds a headless output to the right of the others; returns its name.
     pub fn add_output(&self, w: u32, h: u32, refresh: u32) -> Result<String> {
         let before: Vec<String> = self.monitors()?.into_iter().map(|m| m.name).collect();

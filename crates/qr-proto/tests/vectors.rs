@@ -78,3 +78,9 @@ fn vectors_file_matches_encoder() {
         assert!(text.contains(&needle), "vector {} is stale; run gen-vectors", s.name);
     }
 }
+
+#[test]
+fn unknown_message_tags_are_skipped() {
+    // A newer peer's message: decoded as Unknown, its body skipped.
+    assert_eq!(Msg::decode(&[250, 1, 2, 3]).unwrap(), Msg::Unknown(250));
+}

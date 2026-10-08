@@ -64,6 +64,20 @@ pub async fn run(path: &str, input: &Input, ctl: &qr_net::files::Control) -> Res
                     refresh: num(2).unwrap_or(0) as u16,
                 });
             }
+            // display W H [HZ] [SCALE%] [TARGET 0 virtual | 1 real] [STREAM]
+            "display" => {
+                qr_net::trace::event("display");
+                ctl(qr_proto::Msg::DisplayRequest {
+                    stream: num(5).unwrap_or(0) as u8,
+                    width: num(0)? as u16,
+                    height: num(1)? as u16,
+                    refresh: num(2).unwrap_or(0) as u16,
+                    scale_pct: num(3).unwrap_or(100) as u16,
+                    target: num(4).unwrap_or(0) as u8,
+                });
+            }
+            "pause" => ctl(qr_proto::Msg::Pause { paused: true }),
+            "resume" => ctl(qr_proto::Msg::Pause { paused: false }),
             "monitor" => {
                 ctl(qr_proto::Msg::SelectMonitor { stream: num(1).unwrap_or(0) as u8, monitor: num(0)? as u8 })
             }

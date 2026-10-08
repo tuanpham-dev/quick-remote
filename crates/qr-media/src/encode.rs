@@ -69,6 +69,8 @@ pub struct EncodedFrame {
 struct Control {
     /// Skip captures before the encoder (network backlog).
     hold: AtomicBool,
+    /// Skip captures while the client asked for no video (hidden).
+    paused: AtomicBool,
     /// Minimum spacing of encoded frames, µs (frame-rate cap).
     min_interval_us: AtomicU64,
     last_kept_pts_us: AtomicU64,
@@ -360,6 +362,9 @@ impl Encoder {
                 return gst::PadProbeReturn::Ok;
             };
             let pts_us = pts.useconds();
+            if c.paused.load(Ordering::Relaxed) {
+                return gst::PadProbeReturn::Drop;
+            }
             if c.hold.load(Ordering::Relaxed) {
                 c.skipped.fetch_add(1, Ordering::Relaxed);
                 return gst::PadProbeReturn::Drop;
@@ -492,6 +497,12 @@ impl Encoder {
     /// stays intact, so no keyframe is needed when the hold lifts.
     pub fn hold(&self, on: bool) {
         self.ctl.hold.store(on, Ordering::Relaxed);
+    }
+
+    /// No video at all while paused (the client is hidden); the caller
+    /// forces a keyframe when it resumes.
+    pub fn pause(&self, on: bool) {
+        self.ctl.paused.store(on, Ordering::Relaxed);
     }
 
     pub fn force_keyframe(&self) {

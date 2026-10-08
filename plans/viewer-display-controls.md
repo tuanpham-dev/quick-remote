@@ -63,12 +63,12 @@ Clients choose the remote desktop's size (follow window / fixed), sharpness (pix
 **Goal:** the host applies display requests on sway, KDE and GNOME and reports what it did.
 **Checkpoint:** headless tests `vd_display`, `kde_display`, `gnome_display` pass (A1-host part, A3–A7, A20, A21-host part).
 
-- [ ] **T4 — Messages**
+- [x] **T4 — Messages**
   - Files: `crates/qr-proto/src/msg.rs`, `web/src/proto.ts`, `conformance/vectors.json`
   - Do: tags 28 `DisplayRequest {stream:u8, width:u16, height:u16, refresh:u16, scale_pct:u16, target:u8}`, 29 `DisplayInfo {stream:u8, kind:u8, width:u16, height:u16, scale_pct:u16, note:String}` (kind: 0 fixed, 1 own display, 2 KDE, 3 GNOME), 30 `Pause {paused:bool}`; encode/decode in Rust (`crates/qr-proto/src/msg.rs`) and TS (`web/src/proto.ts`); vectors for each (`crates/qr-proto/src/samples.rs`, regenerate `conformance/vectors.json` with `gen-vectors`); `PROTO_MINOR` 0 → 1 in both; decoders return `Msg::Unknown(tag)` / `{t:"Unknown"}` for an unknown tag instead of failing (callers ignore it); senders gate the new messages on the peer's minor ≥ 1 (host reads `Hello.minor`, clients read `HelloAck.minor`).
   - Depends on: —
   - Done when: `cargo test -p qr-proto` and `web/test/vectors.test.ts` pass with the new vectors; a decode test feeds tag 250 and gets Unknown.
-- [ ] **T5 — Display manager skeleton + sway**
+- [x] **T5 — Display manager skeleton + sway**
   - Files: `crates/qr-host/src/display.rs` (new), `crates/qr-host/src/session.rs`, `crates/qr-host/src/video.rs`, `crates/qr-host/src/vdisplay.rs`, `crates/qr-host/src/nolinux.rs`
   - Do: `DisplayManager::apply(request) -> DisplayInfo`; session handles `DisplayRequest` and maps `Resize` onto it (current scale/target); sends `DisplayInfo` at session start and after each apply; sway: existing `set_mode` plus new `VirtualDisplay::set_scale(output, scale)` (`swaymsg output <name> scale <s>`); X11/Windows: kind 0, no change, note "This desktop keeps its own size".
   - Depends on: T4
@@ -83,7 +83,7 @@ Clients choose the remote desktop's size (follow window / fixed), sharpness (pix
   - Do: `MutterSession::open` gains an optional virtual request; a virtual target replaces the session with one that also has `RecordVirtual` (stream properties `size`, `is-platform: true`), monitors re-read; scale and primary through `ApplyMonitorsConfig` (method 1) on the virtual logical monitor; real target: mode switch when listed, else note.
   - Depends on: T5
   - Done when: `tests/e2e/gnome_display.sh` (new) passes A5 and real-mode note behavior on mutter's fixed virtual monitor.
-- [ ] **T8 — Pause**
+- [x] **T8 — Pause**
   - Files: `crates/qr-host/src/session.rs`, `crates/qr-host/src/video.rs`, `crates/qr-host/src/stream.rs`
   - Do: `Pause{true}` holds all encoders (existing `encoder.hold`), `Pause{false}` releases and forces a keyframe.
   - Depends on: T4

@@ -127,6 +127,22 @@ pub fn msgs() -> Vec<(&'static str, Msg)> {
         ),
         ("Error", Msg::Error { code: ErrorCode::PinWrong as u16, text: "That PIN doesn't match.".into() }),
         ("Bye", Msg::Bye),
+        (
+            "DisplayRequest",
+            Msg::DisplayRequest { stream: 0, width: 2800, height: 1800, refresh: 60, scale_pct: 200, target: 0 },
+        ),
+        (
+            "DisplayInfo",
+            Msg::DisplayInfo {
+                stream: 0,
+                kind: 2,
+                width: 1920,
+                height: 1080,
+                scale_pct: 100,
+                note: "2800×1800 isn't available on this monitor".into(),
+            },
+        ),
+        ("Pause", Msg::Pause { paused: true }),
     ]
 }
 

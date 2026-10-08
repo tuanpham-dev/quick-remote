@@ -45,7 +45,11 @@ pub fn path_class(conn: &quinn::Connection, web: &crate::web::WebPeers) -> Profi
 pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) -> Result<()> {
     let HostSession { control_tx, mut control_rx, hello, client_name, .. } = hs;
     let control_tx = Arc::new(AsyncMutex::new(control_tx));
-    let Msg::Hello { want_width, want_height, want_refresh, decoders, .. } = hello else { unreachable!() };
+    let Msg::Hello { minor: client_minor, want_width, want_height, want_refresh, decoders, .. } = hello else {
+        unreachable!()
+    };
+    // Display requests, display info and pause: protocol 1.1 and later.
+    let display_aware = client_minor >= 1;
 
     let Some((enc, _cap)) = choose_encoder(&ctx, &decoders) else {
         let ours: Vec<&str> = ctx.encoders.iter().map(|e| e.codec.name()).collect();
@@ -105,6 +109,9 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
     let video =
         Arc::new(Video::new(ctx.clone(), conn.clone(), enc.clone(), enc444, max_datagram, ctl.clone()));
     video.start(0, 0, mode).await?;
+    if display_aware {
+        ctl(crate::display::info(&ctx, &video, 0, String::new()));
+    }
     let _audio = match crate::media::start_audio(&ctx, &conn) {
         Ok(a) => a,
         Err(e) => {
@@ -309,6 +316,17 @@ async fn control_loop(
                 let mode = (width.min(7680) as u32 & !1, height.min(4320) as u32 & !1, fps);
                 video.request_resize(stream, mode);
             }
+            Msg::DisplayRequest { stream, width, height, refresh, scale_pct, target } => {
+                let r = crate::display::Request { width, height, refresh, scale_pct, target };
+                tracing::info!(stream, ?r, "display request");
+                let info = crate::display::apply(ctx, video, stream, r).await;
+                ctl(info);
+            }
+            Msg::Pause { paused } => {
+                tracing::info!(paused, "client video pause");
+                video.pause(paused);
+            }
+            Msg::Unknown(t) => tracing::debug!(tag = t, "a message type this host doesn't know"),
             Msg::Bye => return Ok(()),
             other => tracing::debug!(?other, "unhandled control message"),
         }

@@ -285,12 +285,17 @@ pub struct InputState {
     pad_seq: std::collections::HashMap<u8, u32>,
 }
 
+/// A stream's monitor origin in the desktop layout and its desktop scale.
+type Placement = ((i32, i32), f64);
+
 pub struct Input {
     pub injector: Mutex<Box<dyn Injector>>,
     pub state: Mutex<InputState>,
     /// Where each stream's picture sits on the desktop: absolute positions
     /// are stream pixels plus this.
-    origins: Mutex<std::collections::HashMap<u8, (i32, i32)>>,
+    /// Per stream: its monitor's origin in the desktop layout, and the
+    /// desktop scale (stream pixels per layout unit).
+    origins: Mutex<std::collections::HashMap<u8, Placement>>,
 }
 
 impl Input {
@@ -299,14 +304,15 @@ impl Input {
     }
 
     /// Records where stream `stream`'s monitor sits on the desktop.
-    pub fn set_origin(&self, stream: u8, origin: (i32, i32)) {
-        self.origins.lock().expect("lock").insert(stream, origin);
+    pub fn set_origin(&self, stream: u8, origin: (i32, i32), scale: f64) {
+        self.origins.lock().expect("lock").insert(stream, (origin, scale.max(0.25)));
     }
 
     /// A stream position on the desktop.
     fn place(&self, stream: u8, x: u16, y: u16) -> (u16, u16) {
-        let (ox, oy) = self.origins.lock().expect("lock").get(&stream).copied().unwrap_or((0, 0));
-        ((x as i32 + ox).clamp(0, u16::MAX as i32) as u16, (y as i32 + oy).clamp(0, u16::MAX as i32) as u16)
+        let ((ox, oy), s) = self.origins.lock().expect("lock").get(&stream).copied().unwrap_or(((0, 0), 1.0));
+        let (x, y) = ((x as f64 / s).round() as i32, (y as f64 / s).round() as i32);
+        ((x + ox).clamp(0, u16::MAX as i32) as u16, (y + oy).clamp(0, u16::MAX as i32) as u16)
     }
 
     pub fn event(&self, ev: &InputEvent) {

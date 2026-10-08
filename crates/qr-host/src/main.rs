@@ -2,6 +2,7 @@
 //! with paired clients.
 
 mod clipboard;
+mod display;
 #[cfg(target_os = "linux")]
 mod gpuconv;
 mod input;

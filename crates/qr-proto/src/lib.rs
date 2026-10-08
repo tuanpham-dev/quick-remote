@@ -22,7 +22,7 @@ pub use input::InputEvent;
 pub use msg::{Codec, CodecCap, Feedback, HostStats, Monitor, Msg};
 
 pub const PROTO_MAJOR: u16 = 1;
-pub const PROTO_MINOR: u16 = 0;
+pub const PROTO_MINOR: u16 = 1;
 
 pub const ALPN: &[u8] = b"qr/1";
 

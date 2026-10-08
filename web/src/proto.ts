@@ -3,7 +3,7 @@
 // conformance/vectors.json by test/vectors.test.ts.
 
 export const PROTO_MAJOR = 1;
-export const PROTO_MINOR = 0;
+export const PROTO_MINOR = 1;
 
 export class Writer {
   private buf = new Uint8Array(64);
@@ -102,17 +102,27 @@ export type Msg =
   | { t: "Rumble"; idx: number; strong: number; weak: number; ms: number }
   | ({ t: "HostStats" } & HostStats)
   | { t: "Error"; code: number; text: string }
-  | { t: "Bye" };
+  | { t: "Bye" }
+  | { t: "DisplayRequest"; stream: number; width: number; height: number; refresh: number; scalePct: number; target: number }
+  | { t: "DisplayInfo"; stream: number; kind: number; width: number; height: number; scalePct: number; note: string }
+  | { t: "Pause"; paused: boolean }
+  | { t: "Unknown"; tag: number };
+
+/** `DisplayInfo.kind`. */
+export const DisplayKind = { FIXED: 0, OWN: 1, KDE: 2, GNOME: 3 } as const;
+/** `DisplayRequest.target`. */
+export const DisplayTarget = { VIRTUAL: 0, REAL: 1 } as const;
 
 const TAG: Record<Msg["t"], number> = {
   Hello: 1, HelloAck: 2, PairSpake: 3, PairConfirm: 4, SessionStart: 5, Ping: 6, Pong: 7, Feedback: 8,
   FrameLost: 9, KeyframeReq: 10, SetMode: 11, MonitorList: 12, SelectMonitor: 13, StreamStarted: 14,
   StreamStop: 15, Resize: 16, Clipboard: 17, FileOffer: 18, FileAccept: 19, FileCancel: 20, FileDone: 21,
   PadAttach: 22, PadDetach: 23, Rumble: 24, HostStats: 25, Error: 26, Bye: 27,
+  DisplayRequest: 28, DisplayInfo: 29, Pause: 30, Unknown: 0,
 };
 
 export function encodeMsg(m: Msg): Uint8Array {
-  const w = new Writer().u8(TAG[m.t]);
+  const w = new Writer().u8(m.t === "Unknown" ? m.tag : TAG[m.t]);
   switch (m.t) {
     case "Hello":
       w.u16(m.major).u16(m.minor).str(m.name).str(m.os).u16(m.wantWidth).u16(m.wantHeight).u16(m.wantRefresh);
@@ -140,6 +150,10 @@ export function encodeMsg(m: Msg): Uint8Array {
     case "StreamStarted": w.u8(m.stream).u8(m.monitor).u8(m.codec).bool(m.chroma444).u16(m.width).u16(m.height).u16(m.fps); break;
     case "StreamStop": w.u8(m.stream); break;
     case "Resize": w.u8(m.stream).u16(m.width).u16(m.height).u16(m.refresh); break;
+    case "DisplayRequest": w.u8(m.stream).u16(m.width).u16(m.height).u16(m.refresh).u16(m.scalePct).u8(m.target); break;
+    case "DisplayInfo": w.u8(m.stream).u8(m.kind).u16(m.width).u16(m.height).u16(m.scalePct).str(m.note); break;
+    case "Pause": w.bool(m.paused); break;
+    case "Unknown": break;
     case "Clipboard": w.u8(m.kind).bytes(m.data); break;
     case "FileOffer": w.u32(m.id).str(m.name).u64(m.size).raw(m.sha256); break;
     case "FileAccept": w.u32(m.id); break;
@@ -215,7 +229,11 @@ export function decodeMsg(b: Uint8Array): Msg {
       break;
     case 26: m = { t: "Error", code: r.u16(), text: r.str() }; break;
     case 27: m = { t: "Bye" }; break;
-    default: throw new Error(`unknown message tag ${tag}`);
+    case 28: m = { t: "DisplayRequest", stream: r.u8(), width: r.u16(), height: r.u16(), refresh: r.u16(), scalePct: r.u16(), target: r.u8() }; break;
+    case 29: m = { t: "DisplayInfo", stream: r.u8(), kind: r.u8(), width: r.u16(), height: r.u16(), scalePct: r.u16(), note: r.str() }; break;
+    case 30: m = { t: "Pause", paused: r.bool() }; break;
+    // From a newer host: skip it whole.
+    default: r.rest(); return { t: "Unknown", tag };
   }
   r.finish();
   return m;

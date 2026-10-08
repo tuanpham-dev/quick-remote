@@ -302,6 +302,54 @@ pub enum Msg {
     },
     /// Client → host: the session ends on purpose (no auto-reconnect).
     Bye,
+    /// Client → host (protocol 1.1+): the screen this stream should show:
+    /// its size in pixels, refresh in Hz (0: the host's), desktop scale in
+    /// percent (100: none), and on desktops with a choice, `target` 0 for a
+    /// virtual monitor of its own or 1 for the real monitor.
+    DisplayRequest {
+        stream: u8,
+        width: u16,
+        height: u16,
+        refresh: u16,
+        scale_pct: u16,
+        target: u8,
+    },
+    /// Host → client (protocol 1.1+): what the desktop can do and what it
+    /// applied. `kind`: see [`display_kind`]. `note` explains a request that
+    /// could not be met as asked (empty otherwise).
+    DisplayInfo {
+        stream: u8,
+        kind: u8,
+        width: u16,
+        height: u16,
+        scale_pct: u16,
+        note: String,
+    },
+    /// Client → host (protocol 1.1+): stop (true) or resume (false) video,
+    /// e.g. while the client is hidden. Resuming starts with a keyframe.
+    Pause {
+        paused: bool,
+    },
+    /// A message type this build doesn't know (from a newer peer): ignored.
+    Unknown(u8),
+}
+
+/// `DisplayInfo.kind`.
+pub mod display_kind {
+    /// The desktop keeps its own size (X11, Windows).
+    pub const FIXED: u8 = 0;
+    /// The host's own virtual display: any size.
+    pub const OWN: u8 = 1;
+    /// KDE Plasma: a virtual monitor or the real one.
+    pub const KDE: u8 = 2;
+    /// GNOME: a virtual monitor or the real one.
+    pub const GNOME: u8 = 3;
+}
+
+/// `DisplayRequest.target`.
+pub mod display_target {
+    pub const VIRTUAL: u8 = 0;
+    pub const REAL: u8 = 1;
 }
 
 mod tag {
@@ -332,6 +380,9 @@ mod tag {
     pub const HOST_STATS: u8 = 25;
     pub const ERROR: u8 = 26;
     pub const BYE: u8 = 27;
+    pub const DISPLAY_REQUEST: u8 = 28;
+    pub const DISPLAY_INFO: u8 = 29;
+    pub const PAUSE: u8 = 30;
 }
 
 fn put_cap(w: &mut Writer, c: &CodecCap) {
@@ -463,6 +514,18 @@ impl Msg {
             Msg::Error { code, text } => {
                 w.u8(tag::ERROR).u16(*code).str(text);
             }
+            Msg::DisplayRequest { stream, width, height, refresh, scale_pct, target } => {
+                w.u8(tag::DISPLAY_REQUEST).u8(*stream).u16(*width).u16(*height).u16(*refresh).u16(*scale_pct).u8(*target);
+            }
+            Msg::DisplayInfo { stream, kind, width, height, scale_pct, note } => {
+                w.u8(tag::DISPLAY_INFO).u8(*stream).u8(*kind).u16(*width).u16(*height).u16(*scale_pct).str(note);
+            }
+            Msg::Pause { paused } => {
+                w.u8(tag::PAUSE).bool(*paused);
+            }
+            Msg::Unknown(t) => {
+                w.u8(*t);
+            }
             Msg::Bye => {
                 w.u8(tag::BYE);
             }
@@ -554,7 +617,28 @@ impl Msg {
             }),
             tag::ERROR => Msg::Error { code: r.u16()?, text: r.str()? },
             tag::BYE => Msg::Bye,
-            t => return Err(DecodeError::BadTag("message", t)),
+            tag::DISPLAY_REQUEST => Msg::DisplayRequest {
+                stream: r.u8()?,
+                width: r.u16()?,
+                height: r.u16()?,
+                refresh: r.u16()?,
+                scale_pct: r.u16()?,
+                target: r.u8()?,
+            },
+            tag::DISPLAY_INFO => Msg::DisplayInfo {
+                stream: r.u8()?,
+                kind: r.u8()?,
+                width: r.u16()?,
+                height: r.u16()?,
+                scale_pct: r.u16()?,
+                note: r.str()?,
+            },
+            tag::PAUSE => Msg::Pause { paused: r.bool()? },
+            // From a newer peer: skip it whole.
+            t => {
+                r.rest();
+                Msg::Unknown(t)
+            }
         })
     }
 }

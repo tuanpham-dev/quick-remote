@@ -200,6 +200,9 @@ pub struct ClientSession {
     pub host_fp: Fingerprint,
     pub rendezvous: String,
     pub paired_now: bool,
+    /// The host's protocol minor version: newer messages (display
+    /// requests, pause: 1+) are sent only to hosts that know them.
+    pub host_minor: u16,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -252,7 +255,7 @@ async fn client_handshake_inner(
     let mut rx = FramedRecv(rx);
     tx.send(&hello).await?;
     let ack = expect_no_error(rx.recv().await?)?;
-    let Msg::HelloAck { name, host_id, need_pin, rendezvous, .. } = ack else {
+    let Msg::HelloAck { minor: host_minor, name, host_id, need_pin, rendezvous, .. } = ack else {
         bail!("expected HelloAck, got {ack:?}")
     };
     let known = keystore.lock().expect("keystore lock").get(&host_fp).is_some();
@@ -264,6 +267,7 @@ async fn client_handshake_inner(
         host_fp,
         rendezvous: rendezvous.clone(),
         paired_now,
+        host_minor,
     };
     if !need_pin {
         if !known {

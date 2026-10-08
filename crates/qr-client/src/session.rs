@@ -586,6 +586,9 @@ pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, 
                         sh.stats.width = width as u32;
                         sh.stats.height = height as u32;
                     }
+                    Ok(Msg::DisplayInfo { stream, kind, width, height, scale_pct, note }) => {
+                        tracing::info!(stream, kind, width, height, scale_pct, note, "display info");
+                    }
                     Ok(Msg::Error { text, .. }) => {
                         let _ = end_tx.send(Some(text));
                         return;

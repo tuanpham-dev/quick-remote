@@ -336,6 +336,9 @@ impl Injector for WlInput {
     }
 
     fn abs(&mut self, x: u16, y: u16) -> Result<()> {
+        // Take in layout changes first (a resize or scale since the last
+        // event): the position maps over the layout as it is now.
+        self.flush()?;
         let (w, h) = self.extent();
         let t = self.time();
         self.pointer.motion_absolute(t, (x as u32).min(w - 1), (y as u32).min(h - 1), w, h);

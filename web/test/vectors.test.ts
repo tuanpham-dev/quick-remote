@@ -40,3 +40,8 @@ test("truncated messages throw instead of misparsing", () => {
     }
   }
 });
+
+test("unknown message tags are skipped", () => {
+  // A newer host's message: decoded as Unknown, its body skipped.
+  assert.deepEqual(decodeMsg(Uint8Array.from([250, 1, 2, 3])), { t: "Unknown", tag: 250 });
+});
