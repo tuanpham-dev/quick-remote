@@ -248,6 +248,16 @@ async fn serve_http<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(mut
     Ok(())
 }
 
+/// Sends an error to the page and lets it read it: the page closes the
+/// session once it has (closing first would lose the message over a real
+/// network, and Chrome would show only "Connection lost").
+async fn reject(conn: &wtransport::Connection, tx: &mut wtransport::SendStream, v: &Value) {
+    if send_json(tx, v).await.is_ok() {
+        let _ = tx.finish().await;
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(3), conn.closed()).await;
+    }
+}
+
 async fn send_json<W: tokio::io::AsyncWrite + Unpin>(w: &mut W, v: &Value) -> Result<()> {
     let b = serde_json::to_vec(v)?;
     w.write_all(&(b.len() as u32).to_le_bytes()).await?;
@@ -301,14 +311,14 @@ async fn authenticate(gw: &Gateway, conn: &wtransport::Connection) -> Result<Str
                 .is_ok();
             let known = gw.web_keys.lock().expect("lock").get(&fp).is_some();
             if !(ok && known) {
-                send_json(&mut tx, &json!({"t": "error", "code": "unpaired", "text": "This browser isn't paired with the host. Enter the PIN shown on the host."})).await?;
+                reject(conn, &mut tx, &json!({"t": "error", "code": "unpaired", "text": "This browser isn't paired with the host. Enter the PIN shown on the host."})).await;
                 bail!("unknown or invalid browser key");
             }
         }
         Some("pair") => {
             let ip = conn.remote_address().ip();
             if !gw.limiter.lock().expect("lock").allowed(ip, Instant::now()) {
-                send_json(&mut tx, &json!({"t": "error", "code": "rate", "text": "Too many wrong PINs from this address. Wait a minute and try again."})).await?;
+                reject(conn, &mut tx, &json!({"t": "error", "code": "rate", "text": "Too many wrong PINs from this address. Wait a minute and try again."})).await;
                 bail!("rate limited");
             }
             let pin = gw.pin.lock().expect("lock").clone();
@@ -320,7 +330,7 @@ async fn authenticate(gw: &Gateway, conn: &wtransport::Connection) -> Result<Str
             let mac: [u8; 32] = b64(&c, "mac")?.try_into().map_err(|_| anyhow!("bad mac"))?;
             let Some(keys) = keys.filter(|k| k.check(true, &mac)) else {
                 gw.limiter.lock().expect("lock").failure(ip, Instant::now());
-                send_json(&mut tx, &json!({"t": "error", "code": "pin", "text": "That PIN doesn't match. Check the code on the host and try again."})).await?;
+                reject(conn, &mut tx, &json!({"t": "error", "code": "pin", "text": "That PIN doesn't match. Check the code on the host and try again."})).await;
                 bail!("wrong PIN from {ip}");
             };
             send_json(&mut tx, &json!({"t": "confirm", "mac": B64.encode(keys.host_mac())})).await?;
