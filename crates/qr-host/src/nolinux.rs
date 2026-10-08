@@ -30,6 +30,9 @@ pub mod vdisplay {
         pub fn set_mode(&self, _output: &str, _w: u32, _h: u32, _refresh: u32) -> Result<()> {
             match self.never {}
         }
+        pub fn set_scale(&self, _output: &str, _scale_pct: u16) -> Result<()> {
+            match self.never {}
+        }
         pub fn monitors(&self) -> Result<Vec<Monitor>> {
             match self.never {}
         }
@@ -51,6 +54,11 @@ pub mod mutter {
         never: Infallible,
     }
 
+    pub const PENDING_MONITOR: u8 = 254;
+
+    /// Stand-in for a D-Bus object path.
+    pub struct Path;
+
     impl MutterSession {
         pub async fn start() -> Result<Self> {
             bail!("GNOME's remote desktop needs Linux")
@@ -62,6 +70,37 @@ pub mod mutter {
             match self.never {}
         }
         pub fn injector(&self) -> Result<MutterInput> {
+            match self.never {}
+        }
+        pub async fn record_virtual(&self) -> Result<(Path, u32)> {
+            match self.never {}
+        }
+        pub fn add_virtual(&self, _name: &str, _monitor: Monitor, _path: Path, _node: u32) -> u8 {
+            match self.never {}
+        }
+        pub fn virtual_monitor(&self, _name: &str) -> Option<Monitor> {
+            match self.never {}
+        }
+        pub fn is_virtual(&self, _id: u8) -> bool {
+            match self.never {}
+        }
+        pub async fn stop_virtual(&self, _name: &str) {
+            match self.never {}
+        }
+        #[allow(clippy::type_complexity)]
+        pub async fn layout(&self) -> Result<Vec<(String, i32, i32, u32, u32, u32, bool)>> {
+            match self.never {}
+        }
+        pub async fn refresh(&self) -> Result<()> {
+            match self.never {}
+        }
+        pub async fn configure(
+            &self,
+            _connector: &str,
+            _mode: Option<(u32, u32, u32)>,
+            _scale_pct: u16,
+            _primary: bool,
+        ) -> Result<(u16, bool)> {
             match self.never {}
         }
     }
@@ -121,9 +160,34 @@ pub mod kwin {
         pub fn stream(&self, _monitor: &Monitor) -> Result<u32> {
             match self.never {}
         }
+        pub fn can_create_virtual(&self) -> bool {
+            match self.never {}
+        }
+        pub fn is_ours(&self, _name: &str) -> bool {
+            match self.never {}
+        }
+        pub fn create_virtual(&self, _name: &str, _size: (u32, u32), _scale_pct: u16) -> Result<u32> {
+            match self.never {}
+        }
+        pub fn virtual_node(&self, _name: &str) -> Option<Result<u32>> {
+            match self.never {}
+        }
+        pub fn remove_virtual(&self, _name: &str) {
+            match self.never {}
+        }
         pub fn injector(&self) -> Result<super::mutter::MutterInput> {
             match self.never {}
         }
+    }
+
+    pub fn kscreen(_args: &[&str]) -> Result<String> {
+        bail!("KDE needs Linux")
+    }
+    pub fn kscreen_modes(_name: &str) -> Result<Vec<(u32, u32, u32)>> {
+        bail!("KDE needs Linux")
+    }
+    pub fn kscreen_scale_pct(_name: &str) -> Result<u16> {
+        bail!("KDE needs Linux")
     }
 }
 
