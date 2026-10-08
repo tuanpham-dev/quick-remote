@@ -78,7 +78,7 @@ Clients choose the remote desktop's size (follow window / fixed), sharpness (pix
   - Do: `KwinSession::stream_virtual(name, w, h, scale) -> node` via `stream_virtual_output` (bind screencast v4 → v2+ request exists); one virtual monitor per client key, replaced on change, closed 60 s after the session ends (timer in `DisplayManager`, cancelled on reconnect with the same key); after creation, if `kscreen-doctor -j` lists no non-virtual output enabled, set `output.<name>.priority.1`; real target: `kscreen-doctor output.<name>.mode.<W>x<H>@<Hz>` when listed, `output.<name>.scale.<s>`, else note.
   - Depends on: T5
   - Done when: `tests/e2e/kde_display.sh` (new, headless KWin, checks permission path unchanged) passes A3, A4 (with 20 s / 70 s waits), A6, A7-KDE.
-- [ ] **T7 — GNOME virtual and real monitor**
+- [x] **T7 — GNOME virtual and real monitor**
   - Files: `crates/qr-host/src/mutter.rs`, `crates/qr-host/src/display.rs`
   - Do: `MutterSession::open` gains an optional virtual request; a virtual target replaces the session with one that also has `RecordVirtual` (stream properties `size`, `is-platform: true`), monitors re-read; scale and primary through `ApplyMonitorsConfig` (method 1) on the virtual logical monitor; real target: mode switch when listed, else note.
   - Depends on: T5
@@ -156,4 +156,5 @@ Clients choose the remote desktop's size (follow window / fixed), sharpness (pix
 
 ## Open Questions / Risks
 - **Found in T6:** KWin's headless backend (`--virtual`) can't add virtual outputs (only the DRM backend implements `createVirtualOutput`), so KDE virtual monitors (A3, A4) can't be verified on this machine; the host detects a headless KWin, uses the real monitor and says so in `DisplayInfo` (tested as A3-fallback). `kscreen-doctor` must run with its own defaults (Qt's offscreen platform reads a fake screen).
+- **Found in T7:** mutter starts streams added to a running session when asked (`Stream.Start`), so GNOME needs no session replacement: a re-read monitor gets a fresh stream, and a virtual monitor is `RecordVirtual` + `Start`, created at the size its first reader asks for. mutter refuses scales that would make the logical size smaller than about 800×480 (1600×900 at 2× is refused; the host reports the scale it got).
 - KWin `stream_virtual_output` scale and refresh handling, and mutter `RecordVirtual` + `ApplyMonitorsConfig` on a virtual monitor, are unverified: T6/T7 start by probing them on the headless desktops; any missing capability becomes a `DisplayInfo` note and a spec update.

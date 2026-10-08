@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use qr_media::encode::{EncodeConfig, Source};
 use qr_media::probe::EncoderInfo;
-use qr_proto::Msg;
+use qr_proto::{Monitor, Msg};
 
 use crate::HostCtx;
 use crate::ratectl::{Limits, RateCtl};
@@ -51,6 +51,9 @@ pub struct Video {
     paused: AtomicBool,
     /// Desktop scale per stream, percent (100 = none), for input mapping.
     scale_pct: Mutex<BTreeMap<u8, u16>>,
+    /// A stream about to read a node whose monitor isn't laid out yet (a
+    /// GNOME virtual monitor appears once its stream is read).
+    pending: Mutex<BTreeMap<u8, u32>>,
 }
 
 impl Video {
@@ -77,7 +80,23 @@ impl Video {
             resize_gen: Default::default(),
             paused: Default::default(),
             scale_pct: Default::default(),
+            pending: Default::default(),
         }
+    }
+
+    /// Starts stream `id` from PipeWire `node` at `mode`'s size, for a
+    /// monitor that only appears once read; [`Video::attach`] names it.
+    pub async fn start_pending(&self, id: u8, node: u32, mode: (u32, u32, u32)) -> Result<()> {
+        self.pending.lock().expect("lock").insert(id, node);
+        self.start(id, crate::mutter::PENDING_MONITOR, mode).await
+    }
+
+    /// Stream `id` shows `monitor` (laid out now): input maps onto it.
+    pub fn attach(&self, id: u8, monitor: u8) {
+        if let Some(c) = self.streams.lock().expect("lock").get_mut(&id) {
+            c.monitor = monitor;
+        }
+        self.set_scale_pct(id, self.scale_pct(id));
     }
 
     /// Stops (true) or resumes (false) all video; resuming sends keyframes.
@@ -144,7 +163,22 @@ impl Video {
         }
         let _one = self.restart.lock().await;
         let mons = self.ctx.monitors();
-        let mon = mons.iter().find(|m| m.id == monitor).or(mons.first()).cloned().context("no monitor")?;
+        let pending = (monitor == crate::mutter::PENDING_MONITOR)
+            .then(|| self.pending.lock().expect("lock").remove(&id))
+            .flatten();
+        let mon = match pending {
+            Some(_) => Monitor {
+                id: monitor,
+                name: "pending".into(),
+                width: mode.0 as u16,
+                height: mode.1 as u16,
+                refresh_mhz: mode.2 * 1000,
+                x: 0,
+                y: 0,
+                primary: false,
+            },
+            None => mons.iter().find(|m| m.id == monitor).or(mons.first()).cloned().context("no monitor")?,
+        };
         let (mut w, mut h, fps) = mode;
         let mut opened = None;
         let source = if let Some(socket) = self.ctx.screencopy_socket() {
@@ -171,13 +205,21 @@ impl Video {
             };
             opened = Some(o);
             s
+        } else if let Some(node) = pending {
+            // A monitor that appears when read: ask for its size.
+            drop(self.streams.lock().expect("lock").remove(&id));
+            Source::PipeWire { fd: None, node, size: Some((w, h)) }
         } else if let Some(m) = &self.ctx.mutter {
             // GNOME: the monitor's stream; recorded anew (at its current
             // layout) after a capture of it ended.
             drop(self.streams.lock().expect("lock").remove(&id));
             let (now, node) = m.stream(mon.id).await?;
-            (w, h) = (now.width as u32, now.height as u32);
-            Source::PipeWire { fd: None, node }
+            // The layout is in logical units; the stream has the pixels.
+            let k = self.scale_pct(id) as f64 / 100.0;
+            (w, h) = (((now.width as f64 * k).round() as u32) & !1, ((now.height as f64 * k).round() as u32) & !1);
+            // A virtual monitor keeps the size its reader asks for.
+            let size = m.is_virtual(mon.id).then_some((w, h));
+            Source::PipeWire { fd: None, node, size }
         } else if self.ctx.kwin.is_some() {
             // KDE: a fresh screencast at the monitor's current size (a
             // running PipeWire stream can't change size under pipewiresrc).
@@ -192,7 +234,7 @@ impl Video {
                 kwin.virtual_node(&m.name).unwrap_or_else(|| kwin.stream(&m))
             })
             .await??;
-            Source::PipeWire { fd: None, node }
+            Source::PipeWire { fd: None, node, size: None }
         } else {
             (w, h) = (mon.width as u32, mon.height as u32);
             self.ctx.source_for(&mon)

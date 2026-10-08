@@ -25,6 +25,7 @@ phase1)
 	run lan a15_x11
 	run lan a15_wayland
 	run lan gnome_resize
+	run lan gnome_display
 	run lan a15_wlroots
 	run lan a15_kde
 	run lan kde_fps

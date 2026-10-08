@@ -27,6 +27,9 @@ pub struct Stream {
     path: OwnedObjectPath,
     /// A capture has read it: the next one records the monitor anew.
     used: bool,
+    /// A client's virtual monitor (its registry name), recorded with
+    /// `RecordVirtual`: captures reuse its stream.
+    virtual_name: Option<String>,
 }
 
 /// The monitors' streams, shared with the input (absolute positions go to
@@ -43,10 +46,16 @@ pub struct MutterSession {
     streams: Streams,
     /// The current remote-desktop session.
     rd_session: tokio::sync::watch::Sender<OwnedObjectPath>,
+    /// The current screencast session (streams are added to it).
+    sc_session: std::sync::Mutex<OwnedObjectPath>,
     /// One replacement at a time.
     replacing: tokio::sync::Mutex<()>,
     conn: zbus::Connection,
 }
+
+/// A stream's id for monitors that aren't laid out yet (a virtual monitor
+/// before its first frame).
+pub const PENDING_MONITOR: u8 = 254;
 
 type Spec = (String, String, String, String);
 type Mode = (String, i32, i32, f64, f64, Vec<f64>, HashMap<String, OwnedValue>);
@@ -89,9 +98,10 @@ async fn layout(conn: &zbus::Connection) -> Result<Vec<(String, i32, i32, u32, u
 
 /// A remote-desktop session with a stream for every monitor, started:
 /// its path and the streams.
-async fn open(conn: &zbus::Connection) -> Result<(OwnedObjectPath, Vec<Stream>)> {
+async fn open(conn: &zbus::Connection, skip: &[String]) -> Result<(OwnedObjectPath, OwnedObjectPath, Vec<Stream>)> {
     let conn = conn.clone();
-    let mons = layout(&conn).await?;
+    // Clients' virtual monitors can't be recorded as monitors.
+    let mons: Vec<_> = layout(&conn).await?.into_iter().filter(|m| !skip.contains(&m.0)).collect();
     if mons.is_empty() {
         bail!("mutter reports no monitors");
     }
@@ -133,9 +143,9 @@ async fn open(conn: &zbus::Connection) -> Result<(OwnedObjectPath, Vec<Stream>)>
             .context("mutter started no PipeWire stream")?
             .context("the stream signal ended")?;
         let (node,): (u32,) = msg.body().deserialize()?;
-        streams.push(Stream { monitor, node, path, used: false });
+        streams.push(Stream { monitor, node, path, used: false, virtual_name: None });
     }
-    Ok((rd_session, streams))
+    Ok((rd_session, sc_session, streams))
 }
 
 impl MutterSession {
@@ -143,11 +153,12 @@ impl MutterSession {
     /// monitor.
     pub async fn start() -> Result<Self> {
         let conn = zbus::Connection::session().await.context("connecting to the session bus")?;
-        let (rd_session, streams) = open(&conn).await?;
+        let (rd_session, sc_session, streams) = open(&conn, &[]).await?;
         tracing::info!(monitors = ?streams.iter().map(|s| (&s.monitor.name, s.node)).collect::<Vec<_>>(), "mutter session");
         Ok(Self {
             streams: std::sync::Arc::new(std::sync::Mutex::new(streams)),
             rd_session: tokio::sync::watch::Sender::new(rd_session),
+            sc_session: std::sync::Mutex::new(sc_session),
             replacing: tokio::sync::Mutex::new(()),
             conn,
         })
@@ -163,20 +174,45 @@ impl MutterSession {
     /// session at the current layout.
     pub async fn stream(&self, monitor: u8) -> Result<(Monitor, u32)> {
         let _one = self.replacing.lock().await;
-        let name = {
+        let (name, old_path) = {
             let mut streams = self.streams.lock().unwrap();
             let s = streams.iter_mut().find(|s| s.monitor.id == monitor).context("no such monitor")?;
-            if !s.used {
+            if !s.used || s.virtual_name.is_some() {
                 s.used = true;
                 return Ok((s.monitor.clone(), s.node));
             }
-            s.monitor.name.clone()
+            (s.monitor.name.clone(), s.path.clone())
         };
+        // A fresh stream of the monitor in the running session (streams
+        // recorded after the start start on request); the old one ends.
+        match self.record(&name, None).await {
+            Ok((path, node)) => {
+                if let Ok(p) = zbus::Proxy::new(&self.conn, SC, old_path, "org.gnome.Mutter.ScreenCast.Stream").await {
+                    let _: zbus::Result<()> = p.call("Stop", &()).await;
+                }
+                let _ = self.refresh().await;
+                let mut streams = self.streams.lock().unwrap();
+                let s = streams.iter_mut().find(|s| s.monitor.name == name).context("the monitor is gone")?;
+                (s.node, s.path, s.used) = (node, path, true);
+                return Ok((s.monitor.clone(), node));
+            }
+            Err(e) => tracing::warn!("recording {name} again: {e:#}; replacing the session"),
+        }
+        let skip: Vec<String> = self
+            .streams
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|s| s.virtual_name.is_some())
+            .map(|s| s.monitor.name.clone())
+            .collect();
         let old = self.rd_session.borrow().clone();
         if let Ok(p) = zbus::Proxy::new(&self.conn, RD, old, "org.gnome.Mutter.RemoteDesktop.Session").await {
             let _: zbus::Result<()> = p.call("Stop", &()).await;
         }
-        let (rd_session, fresh) = open(&self.conn).await.context("replacing the remote-desktop session")?;
+        let (rd_session, sc_session, fresh) =
+            open(&self.conn, &skip).await.context("replacing the remote-desktop session")?;
+        *self.sc_session.lock().unwrap() = sc_session;
         tracing::info!(monitors = ?fresh.iter().map(|s| (&s.monitor.name, s.monitor.width, s.monitor.height, s.node)).collect::<Vec<_>>(), "mutter session replaced");
         let mut streams = self.streams.lock().unwrap();
         *streams = fresh;
@@ -187,6 +223,162 @@ impl MutterSession {
             .with_context(|| format!("monitor {name} is gone"))?;
         s.used = true;
         Ok((s.monitor.clone(), s.node))
+    }
+
+    /// Records a virtual monitor in the running session: its stream path
+    /// and PipeWire node. The monitor appears once a capture reads the
+    /// node, at the size the capture asks for.
+    pub async fn record_virtual(&self) -> Result<(OwnedObjectPath, u32)> {
+        self.record("", Some(())).await
+    }
+
+    /// Records monitor `connector` (or, with `virtual_`, a virtual monitor)
+    /// in the running session and starts the stream: its path and node.
+    async fn record(&self, connector: &str, virtual_: Option<()>) -> Result<(OwnedObjectPath, u32)> {
+        let sc = self.sc_session.lock().unwrap().clone();
+        let scs = zbus::Proxy::new(&self.conn, SC, sc, "org.gnome.Mutter.ScreenCast.Session").await?;
+        let rule = zbus::MatchRule::builder()
+            .msg_type(zbus::message::Type::Signal)
+            .interface("org.gnome.Mutter.ScreenCast.Stream")?
+            .member("PipeWireStreamAdded")?
+            .build();
+        let mut added = zbus::MessageStream::for_match_rule(rule, &self.conn, Some(16)).await?;
+        let mut o: HashMap<&str, Value> = HashMap::new();
+        o.insert("cursor-mode", Value::from(1u32));
+        let path: OwnedObjectPath = if virtual_.is_some() {
+            // A monitor of the desktop, not a shared screen.
+            o.insert("is-platform", Value::from(true));
+            scs.call("RecordVirtual", &(o,)).await.context("recording a virtual monitor")?
+        } else {
+            scs.call("RecordMonitor", &(connector, o)).await.with_context(|| format!("recording {connector}"))?
+        };
+        let sp = zbus::Proxy::new(&self.conn, SC, path.clone(), "org.gnome.Mutter.ScreenCast.Stream").await?;
+        // Streams recorded in a running session start on request.
+        let _: () = sp.call("Start", &()).await.context("starting the virtual monitor's stream")?;
+        let node = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while let Some(Ok(msg)) = added.next().await {
+                if msg.header().path().is_some_and(|p| p.as_str() == path.as_str()) {
+                    return msg.body().deserialize::<(u32,)>().ok().map(|(n,)| n);
+                }
+            }
+            None
+        })
+        .await
+        .context("mutter started no PipeWire stream")?
+        .context("the stream signal ended")?;
+        Ok((path, node))
+    }
+
+    /// Lists virtual monitor `name` (registry name) as connector `monitor`,
+    /// streamed from `path`/`node`: its monitor id.
+    pub fn add_virtual(&self, name: &str, mut monitor: Monitor, path: OwnedObjectPath, node: u32) -> u8 {
+        let mut streams = self.streams.lock().unwrap();
+        streams.retain(|s| s.virtual_name.as_deref() != Some(name));
+        monitor.id = streams.iter().map(|s| s.monitor.id).max().map_or(0, |m| m + 1).min(PENDING_MONITOR - 1);
+        let id = monitor.id;
+        tracing::info!(name, connector = monitor.name, width = monitor.width, height = monitor.height, "mutter virtual monitor");
+        streams.push(Stream { monitor, node, path, used: true, virtual_name: Some(name.into()) });
+        id
+    }
+
+    /// Whether monitor `id` is a client's virtual monitor.
+    pub fn is_virtual(&self, id: u8) -> bool {
+        self.streams.lock().unwrap().iter().any(|s| s.monitor.id == id && s.virtual_name.is_some())
+    }
+
+    /// Virtual monitor `name` (registry name), if listed.
+    pub fn virtual_monitor(&self, name: &str) -> Option<Monitor> {
+        let streams = self.streams.lock().unwrap();
+        streams.iter().find(|s| s.virtual_name.as_deref() == Some(name)).map(|s| s.monitor.clone())
+    }
+
+    /// Ends virtual monitor `name` (registry name): mutter removes it.
+    pub async fn stop_virtual(&self, name: &str) {
+        let path = {
+            let mut streams = self.streams.lock().unwrap();
+            let i = streams.iter().position(|s| s.virtual_name.as_deref() == Some(name));
+            i.map(|i| streams.remove(i).path)
+        };
+        if let Some(path) = path {
+            if let Ok(p) = zbus::Proxy::new(&self.conn, SC, path, "org.gnome.Mutter.ScreenCast.Stream").await {
+                let _: zbus::Result<()> = p.call("Stop", &()).await;
+            }
+            tracing::info!(name, "mutter virtual monitor removed");
+        }
+    }
+
+    /// The connectors mutter lays out now, with their logical rectangles.
+    pub async fn layout(&self) -> Result<Vec<(String, i32, i32, u32, u32, u32, bool)>> {
+        layout(&self.conn).await
+    }
+
+    /// Takes in the current layout (positions and sizes change with a new
+    /// monitor or scale): every listed monitor's rectangle.
+    pub async fn refresh(&self) -> Result<()> {
+        let now = layout(&self.conn).await?;
+        let mut streams = self.streams.lock().unwrap();
+        for s in streams.iter_mut() {
+            if let Some((_, x, y, w, h, mhz, primary)) = now.iter().find(|m| m.0 == s.monitor.name) {
+                (s.monitor.x, s.monitor.y, s.monitor.width, s.monitor.height) = (*x, *y, *w as u16, *h as u16);
+                (s.monitor.refresh_mhz, s.monitor.primary) = (*mhz, *primary);
+            }
+        }
+        Ok(())
+    }
+
+    /// Reconfigures monitor `connector`: a mode `(w, h, Hz)` when it lists
+    /// one, a scale (the nearest it supports), and primary. Monitors are laid
+    /// out left to right. Returns (scale applied in percent, mode applied).
+    pub async fn configure(
+        &self,
+        connector: &str,
+        mode: Option<(u32, u32, u32)>,
+        scale_pct: u16,
+        primary: bool,
+    ) -> Result<(u16, bool)> {
+        type LogicalConfig = (i32, i32, f64, u32, bool, Vec<(String, String, HashMap<String, Value<'static>>)>);
+        let p = zbus::Proxy::new(&self.conn, DC, "/org/gnome/Mutter/DisplayConfig", DC).await?;
+        let (serial, monitors, logical, _props): (u32, Vec<PhysMonitor>, Vec<Logical>, HashMap<String, OwnedValue>) =
+            p.call("GetCurrentState", &()).await.context("reading mutter's display layout")?;
+        let mut logical = logical;
+        logical.sort_by_key(|l| (l.0, l.1));
+        let (mut x, mut configs, mut out) = (0i32, Vec::<LogicalConfig>::new(), (100u16, false));
+        for (_lx, _ly, scale, transform, was_primary, specs, _) in &logical {
+            let Some(spec) = specs.first() else { continue };
+            let Some((_, modes, _)) = monitors.iter().find(|(s, _, _)| s == spec) else { continue };
+            let current = modes
+                .iter()
+                .find(|m| m.6.get("is-current").and_then(|v| bool::try_from(v).ok()).unwrap_or(false))
+                .or(modes.first());
+            let Some(current) = current else { continue };
+            let target = spec.0 == connector;
+            let mut chosen = current;
+            let mut scale = *scale;
+            if target {
+                if let Some((w, h, hz)) = mode
+                    && let Some(m) = modes.iter().find(|m| {
+                        (m.1 as u32, m.2 as u32) == (w, h) && (hz == 0 || (m.3 - hz as f64).abs() < 1.0)
+                    })
+                {
+                    chosen = m;
+                    out.1 = true;
+                }
+                let want = scale_pct as f64 / 100.0;
+                scale = chosen.5.iter().copied().min_by(|a, b| (a - want).abs().total_cmp(&(b - want).abs())).unwrap_or(1.0);
+                out.0 = (scale * 100.0).round() as u16;
+            }
+            let (w, _h) = if transform % 2 == 1 { (chosen.2, chosen.1) } else { (chosen.1, chosen.2) };
+            let is_primary = if primary { target } else { *was_primary };
+            configs.push((x, 0, scale, *transform, is_primary, vec![(spec.0.clone(), chosen.0.clone(), HashMap::new())]));
+            x += (w as f64 / scale).round() as i32;
+        }
+        let none: HashMap<&str, Value> = HashMap::new();
+        // Method 1: temporary (no confirmation dialog, not saved).
+        let _: () = p
+            .call("ApplyMonitorsConfig", &(serial, 1u32, configs, none))
+            .await
+            .context("applying the monitor configuration")?;
+        Ok(out)
     }
 
     /// The injector for this session. Calls go out in order from one task

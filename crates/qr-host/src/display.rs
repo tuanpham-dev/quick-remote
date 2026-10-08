@@ -87,8 +87,13 @@ impl Registry {
                     _ => None,
                 }
             };
-            if let (Some(name), Some(k)) = (name, &ctx.kwin) {
-                k.remove_virtual(&name);
+            if let Some(name) = name {
+                if let Some(k) = &ctx.kwin {
+                    k.remove_virtual(&name);
+                }
+                if let Some(m) = &ctx.mutter {
+                    m.stop_virtual(&name).await;
+                }
             }
         });
     }
@@ -164,8 +169,119 @@ pub async fn apply(ctx: &Arc<HostCtx>, video: &Arc<Video>, client: &str, stream:
             };
             info(ctx, video, stream, note.err().map(|e| format!("{e:#}")).unwrap_or_default())
         }
+        display_kind::GNOME => {
+            let (w, h) = even(r.width, r.height);
+            let note = if r.target == display_target::VIRTUAL {
+                gnome_virtual(ctx, video, client, stream, (w, h, fps), scale).await
+            } else {
+                ctx.displays.release(ctx, client);
+                gnome_real(ctx, video, stream, (w, h, fps), scale).await
+            };
+            info(ctx, video, stream, note.err().map(|e| format!("{e:#}")).unwrap_or_default())
+        }
         _ => info(ctx, video, stream, "This desktop keeps its own size; the picture is fitted to your window.".into()),
     }
+}
+
+/// GNOME: the client's own virtual monitor. mutter creates it at the size
+/// its first reader asks for, so capture starts before it is laid out;
+/// then it gets its scale (and becomes primary when every monitor is
+/// virtual).
+async fn gnome_virtual(
+    ctx: &Arc<HostCtx>,
+    video: &Arc<Video>,
+    client: &str,
+    stream: u8,
+    (w, h, fps): (u32, u32, u32),
+    scale: u16,
+) -> anyhow::Result<()> {
+    let m = ctx.mutter.as_ref().expect("mutter");
+    let name = virtual_name(client);
+    if let Some(mon) = m.virtual_monitor(&name)
+        && ctx.displays.same(client, (w, h), scale).is_some()
+    {
+        ctx.displays.hold(client, name, (w, h), scale);
+        // Its scale first: the capture asks for scale × the logical size.
+        video.set_scale_pct(stream, scale);
+        return video.start(stream, mon.id, (w, h, fps)).await;
+    }
+    m.stop_virtual(&name).await;
+    let before: Vec<String> = m.layout().await?.into_iter().map(|l| l.0).collect();
+    let (path, node) = m.record_virtual().await?;
+    video.set_scale_pct(stream, 100);
+    video.start_pending(stream, node, (w, h, fps)).await?;
+    // The monitor appears with the first frame read.
+    let mut new = None;
+    for _ in 0..60 {
+        if let Some(l) = m.layout().await?.into_iter().find(|l| !before.contains(&l.0)) {
+            new = Some(l);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let (connector, x, y, lw, lh, mhz, primary) =
+        new.ok_or_else(|| anyhow::anyhow!("mutter didn't lay out the virtual monitor"))?;
+    let monitor = qr_proto::Monitor {
+        id: 0,
+        name: connector.clone(),
+        width: lw as u16,
+        height: lh as u16,
+        refresh_mhz: mhz,
+        x,
+        y,
+        primary,
+    };
+    let id = m.add_virtual(&name, monitor, path, node);
+    ctx.displays.hold(client, name, (w, h), scale);
+    // Primary only on a desktop without a physical screen (mutter's own
+    // headless and virtual monitors are Meta-N).
+    let physical = m.layout().await?.iter().any(|l| !l.0.starts_with("Meta-"));
+    let applied = match m.configure(&connector, None, scale, !physical).await {
+        Ok((pct, _)) => pct,
+        Err(e) => {
+            tracing::warn!("configuring {connector}: {e:#}");
+            100
+        }
+    };
+    m.refresh().await?;
+    video.set_scale_pct(stream, applied);
+    video.attach(stream, id);
+    if applied != scale {
+        anyhow::bail!("scale {}% isn't supported here; using {applied}%", scale);
+    }
+    Ok(())
+}
+
+/// GNOME: the real monitor switched to the requested mode when it lists
+/// it, with the scale.
+async fn gnome_real(
+    ctx: &HostCtx,
+    video: &Arc<Video>,
+    stream: u8,
+    (w, h, fps): (u32, u32, u32),
+    scale: u16,
+) -> anyhow::Result<()> {
+    let m = ctx.mutter.as_ref().expect("mutter");
+    let current = video.current(stream).map(|(id, _)| id);
+    let mons = ctx.monitors();
+    let mon = mons
+        .iter()
+        .find(|x| Some(x.id) == current && !m.is_virtual(x.id))
+        .or_else(|| mons.iter().find(|x| !m.is_virtual(x.id)))
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("this desktop has no monitor of its own"))?;
+    let (applied, fits) = m.configure(&mon.name, Some((w, h, fps)), scale, false).await?;
+    m.refresh().await?;
+    video.set_scale_pct(stream, applied);
+    // The monitor's stream ends with the change: start it anew.
+    let now = ctx.monitors().into_iter().find(|x| x.name == mon.name).unwrap_or(mon);
+    let k = applied as f64 / 100.0;
+    let size = ((now.width as f64 * k).round() as u32, (now.height as f64 * k).round() as u32);
+    video.start(stream, now.id, (size.0, size.1, fps)).await?;
+    if !fits {
+        anyhow::bail!("{w}×{h} isn't available on {}; showing {}×{} scaled", now.name, size.0, size.1);
+    }
+    Ok(())
 }
 
 /// The monitor called `name` once the desktop lists it (a new output takes

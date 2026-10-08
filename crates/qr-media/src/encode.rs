@@ -25,7 +25,9 @@ pub enum Source {
     /// `videotestsrc` (tests and `--source test`).
     Test { pattern: String },
     /// A PipeWire video node, optionally on a portal-provided fd.
-    PipeWire { fd: Option<i32>, node: u32 },
+    /// `size`: ask the stream for this size (a GNOME virtual monitor takes
+    /// the size its reader asks for).
+    PipeWire { fd: Option<i32>, node: u32, size: Option<(u32, u32)> },
     /// Frames pushed by the caller through [`Encoder::push`] (screencopy).
     /// `format`: a GStreamer raw format such as `BGRx`.
     App { format: String },
@@ -119,11 +121,14 @@ pub fn source_desc(s: &Source, w: u32, h: u32, fps: u32) -> String {
         Source::Test { pattern } => {
             format!("videotestsrc is-live=true pattern={pattern} ! video/x-raw,width={w},height={h},framerate={fps}/1")
         }
-        Source::PipeWire { fd, node } => {
+        Source::PipeWire { fd, node, size } => {
             let fd = fd.map(|f| format!(" fd={f}")).unwrap_or_default();
+            let size = size.map(|(w, h)| format!(",width={w},height={h}")).unwrap_or_default();
             // System memory: the converter in front of the encoder can't
             // take DMA-BUF.
-            format!("pipewiresrc{fd} name=pwsrc path={node} always-copy=false do-timestamp=true keepalive-time=1000 ! video/x-raw")
+            format!(
+                "pipewiresrc{fd} name=pwsrc path={node} always-copy=false do-timestamp=true keepalive-time=1000 ! video/x-raw{size}"
+            )
         }
         // Variable rate (frames come on damage); timestamped on push.
         Source::App { format } => format!(
