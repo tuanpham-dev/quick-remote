@@ -65,6 +65,11 @@ pub struct RateCtl {
     /// the decoder caused.
     slow_windows: u32,
     last_decode_step: Option<Instant>,
+    /// Bytes sent since the last feedback (None: unknown, taken as busy).
+    sent_bytes: Option<u64>,
+    /// No congestion signals before this: a (re)started stream's first
+    /// frames arrive out of step with the client's reassembly.
+    grace_until: Option<Instant>,
 }
 
 pub const FPS_STEPS: [u32; 7] = [240, 144, 120, 60, 30, 15, 5];
@@ -87,9 +92,21 @@ impl RateCtl {
             decode_cap: None,
             slow_windows: 0,
             last_decode_step: None,
+            sent_bytes: None,
+            grace_until: None,
         };
         r.fit_fps();
         r
+    }
+
+    /// Ignores congestion signals for a second (a stream just started).
+    pub fn grace(&mut self, now: Instant) {
+        self.grace_until = Some(now + Duration::from_secs(1));
+    }
+
+    /// What the sender put on the wire since the last feedback.
+    pub fn note_sent(&mut self, bytes: u64) {
+        self.sent_bytes = Some(bytes);
     }
 
     /// Applies one feedback report. Returns true when target, fps or
@@ -102,6 +119,14 @@ impl RateCtl {
         self.loss_ewma = self.loss_ewma * 0.8 + loss * 0.2;
         let rx_kbps = (fb.bytes_rx as f64 * 8.0 / window.as_secs_f64() / 1000.0) as u32;
         let dt = window.as_secs_f64().min(0.5);
+        // Sending well under budget (under a quarter: a still screen, a burst now and then):
+        // delivery delay then measures the bursts, not a queue, and what
+        // arrived says nothing about what the path could carry.
+        let idle = self
+            .sent_bytes
+            .take()
+            .is_some_and(|b| (b as f64 * 8.0 / window.as_secs_f64() / 1000.0) < self.target_kbps as f64 * 0.25);
+        let in_grace = self.grace_until.is_some_and(|t| now < t);
 
         // Queueing delay relative to the lowest delay seen in the last 10 s.
         let base = match self.base_delay {
@@ -115,16 +140,24 @@ impl RateCtl {
         // A window in which nothing arrived carries no delay information
         // (a squeezed link delivers only a few frames a second): it neither
         // continues nor breaks a run.
-        if fb.frames_rx > 0 || fb.frames_lost > 0 {
+        if in_grace {
+            (self.lossy_windows, self.rising_windows, self.queued_windows) = (0, 0, 0);
+        } else if fb.frames_rx > 0 || fb.frames_lost > 0 {
             let count = |n: &mut u32, hit: bool| *n = if hit { *n + 1 } else { 0 };
             count(&mut self.lossy_windows, fb.frames_lost > 0);
-            let arrived = fb.frames_rx > 0;
+            let arrived = fb.frames_rx > 0 && !idle;
             count(&mut self.rising_windows, arrived && fb.delay_slope > 3_000 && queueing_ms > 8.0);
             count(&mut self.queued_windows, arrived && queueing_ms > 80.0);
         }
         let congested = self.lossy_windows >= 2 || self.rising_windows >= 3 || self.queued_windows >= 2;
         if congested {
-            let to = if rx_kbps > 0 { (rx_kbps as f64 * 0.85) as u32 } else { (self.target_kbps as f64 * 0.7) as u32 };
+            let to = if idle {
+                (self.target_kbps as f64 * 0.85) as u32
+            } else if rx_kbps > 0 {
+                (rx_kbps as f64 * 0.85) as u32
+            } else {
+                (self.target_kbps as f64 * 0.7) as u32
+            };
             self.decrease(to.min((self.target_kbps as f64 * 0.95) as u32), now);
             (self.lossy_windows, self.rising_windows, self.queued_windows) = (0, 0, 0);
         } else if self.may_increase(now)
@@ -371,5 +404,44 @@ mod tests {
         }
         // 10 lost of 110 sent: 9.1% loss → 2 × 9.1% + 5% = 23%.
         assert!((0.22..=0.24).contains(&r.parity), "parity {}", r.parity);
+    }
+
+    #[test]
+    fn a_still_screen_is_not_congestion() {
+        let t0 = Instant::now();
+        let ms = |v: u64| t0 + Duration::from_millis(v);
+        let mut r = RateCtl::new(limits(), t0);
+        let start = r.target_kbps;
+        // Little sent; a big frame now and then arrives 150 ms late.
+        for i in 0..40 {
+            r.note_sent(2_000);
+            r.on_feedback(&fb(2_000, 0, 0, (1_000, 151_000, 10_000)), ms(i * 50));
+        }
+        assert_eq!(r.target_kbps, start);
+        assert_eq!(r.fps, 60);
+        // A lost frame while idle trims the target; it doesn't drop it to
+        // what a still screen delivers.
+        r.note_sent(2_000);
+        r.on_feedback(&fb(2_000, 0, 1, (0, 0, 0)), ms(2_000));
+        r.note_sent(2_000);
+        r.on_feedback(&fb(2_000, 0, 1, (0, 0, 0)), ms(2_050));
+        assert!(r.target_kbps >= start * 8 / 10, "{} from {start}", r.target_kbps);
+    }
+
+    #[test]
+    fn a_restarted_stream_gets_a_grace_second() {
+        let t0 = Instant::now();
+        let ms = |v: u64| t0 + Duration::from_millis(v);
+        let mut r = RateCtl::new(limits(), t0);
+        r.grace(t0);
+        let start = r.target_kbps;
+        for i in 0..10 {
+            r.on_feedback(&fb(5_000, 0, 2, (0, 0, 0)), ms(i * 50));
+        }
+        assert_eq!(r.target_kbps, start);
+        // After it, loss counts again.
+        r.on_feedback(&fb(5_000, 0, 2, (0, 0, 0)), ms(1_100));
+        r.on_feedback(&fb(5_000, 0, 2, (0, 0, 0)), ms(1_150));
+        assert!(r.target_kbps < start);
     }
 }

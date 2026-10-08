@@ -22,6 +22,8 @@ const HOLD_FILL: f64 = 0.5;
 #[derive(Default)]
 pub struct StreamCounters {
     pub bytes_sent: AtomicU64,
+    /// Bytes sent since the last client feedback (for the rate controller).
+    pub feedback_bytes: AtomicU64,
     pub frames_sent: AtomicU32,
     pub capture_to_encoded_us: AtomicU64,
     pub encode_us: AtomicU64,
@@ -100,6 +102,8 @@ impl VideoStream {
     /// Applies client feedback to the rate controller and the encoder.
     pub fn feedback(&self, fb: &Feedback) {
         let mut r = self.rate.lock().expect("lock");
+        tracing::trace!(?fb, "feedback");
+        r.note_sent(self.counters.feedback_bytes.swap(0, Ordering::Relaxed));
         if r.on_feedback(fb, Instant::now()) {
             self.encoder.set_bitrate(r.target_kbps);
             self.encoder.set_max_fps(r.fps);
@@ -213,6 +217,7 @@ async fn send_loop(
             }
         }
         counters.bytes_sent.fetch_add(bytes, Ordering::Relaxed);
+        counters.feedback_bytes.fetch_add(bytes, Ordering::Relaxed);
         counters.frames_sent.fetch_add(1, Ordering::Relaxed);
         counters.capture_to_encoded_us.fetch_add(f.encode_end_us.saturating_sub(f.capture_us), Ordering::Relaxed);
         counters.encode_us.fetch_add(f.encode_end_us.saturating_sub(f.encode_start_us), Ordering::Relaxed);

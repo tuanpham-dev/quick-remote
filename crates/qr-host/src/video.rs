@@ -241,6 +241,7 @@ impl Video {
         };
         let limits = Limits { width: w, height: h, max_fps: fps, min_kbps: 300, max_kbps: self.ctx.args.max_kbps };
         let mut rate = RateCtl::new(limits, Instant::now());
+        rate.grace(Instant::now());
         if self.ctx.args.bitrate > 0 {
             rate.target_kbps = self.ctx.args.bitrate;
         }
