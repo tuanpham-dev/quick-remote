@@ -174,13 +174,18 @@ fn authorize() -> Result<PathBuf> {
         bail!("the executable's path has characters a desktop file can't take as is: {exec}");
     }
     let exec = if exec.contains(' ') { format!("\"{exec}\"") } else { exec.to_string() };
+    // Written beside and renamed into place: KDE notices changes by the
+    // directory's timestamp, which rewriting an existing file (a host that
+    // moved) leaves alone.
+    let tmp = dir.join(".quickremote-host.desktop.tmp");
     std::fs::write(
-        &path,
+        &tmp,
         format!(
             "[Desktop Entry]\nType=Application\nName=QuickRemote host\nExec={exec}\nNoDisplay=true\n\
              X-KDE-Wayland-Interfaces=zkde_screencast_unstable_v1,org_kde_kwin_fake_input\n"
         ),
     )?;
+    std::fs::rename(&tmp, &path)?;
     Ok(path)
 }
 
