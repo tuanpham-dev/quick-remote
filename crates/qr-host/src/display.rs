@@ -124,6 +124,52 @@ pub fn info(ctx: &HostCtx, video: &Video, stream: u8, note: String) -> Msg {
 
 const FIXED_NOTE: &str = "This desktop keeps its own size; the picture is fitted to your window.";
 
+/// The largest picture a session can carry: the codec's limits (H.264
+/// level 5.2: 4096 wide, 36 864 macroblocks) and the client decoder's.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Limit {
+    pub width: u32,
+    pub height: u32,
+    /// Most 16×16 macroblocks in a frame.
+    pub mbs: u32,
+}
+
+impl Limit {
+    pub fn new(codec: qr_proto::Codec, client: &qr_proto::msg::CodecCap) -> Self {
+        let (w, h, mbs) = match codec {
+            qr_proto::Codec::H264 => (4096, 4096, 36_864),
+            _ => (8192, 4352, 139_264),
+        };
+        let cap = |ours: u32, theirs: u16| if theirs > 0 { ours.min(theirs as u32) } else { ours };
+        Self { width: cap(w, client.max_width), height: cap(h, client.max_height), mbs }
+    }
+
+    /// `r` shrunk to fit, its scale lowered by as much so the desktop keeps
+    /// its logical size; with a note saying so when it had to shrink.
+    pub fn fit(&self, r: Request) -> (Request, Option<String>) {
+        let (w, h) = (r.width.max(1) as f64, r.height.max(1) as f64);
+        let mbs = (w / 16.0).ceil() * (h / 16.0).ceil();
+        let f = (self.width as f64 / w).min(self.height as f64 / h).min((self.mbs as f64 / mbs).sqrt()).min(1.0);
+        if f >= 1.0 {
+            return (r, None);
+        }
+        // A little under, so rounding up to whole macroblocks still fits.
+        let f = f * 0.995;
+        let even = |v: f64| ((v.floor() as u16) & !1).max(2);
+        let out = Request {
+            width: even(w * f),
+            height: even(h * f),
+            scale_pct: ((r.scale_pct as f64 * f).round() as u16).max(50),
+            ..r
+        };
+        let note = format!(
+            "{}×{} is more than this connection's video can carry; using {}×{} at {}% (the same desktop space), scaled to your window.",
+            r.width, r.height, out.width, out.height, out.scale_pct
+        );
+        (out, Some(note))
+    }
+}
+
 /// An even size within what encoders take.
 fn even(w: u16, h: u16) -> (u32, u32) {
     ((w.clamp(320, 7680) & !1) as u32, (h.clamp(200, 4320) & !1) as u32)
@@ -131,9 +177,23 @@ fn even(w: u16, h: u16) -> (u32, u32) {
 
 /// Applies `r` to stream `stream` of `client`'s session; returns the
 /// `DisplayInfo` to send.
-pub async fn apply(ctx: &Arc<HostCtx>, video: &Arc<Video>, client: &str, stream: u8, r: Request) -> Msg {
+pub async fn apply(ctx: &Arc<HostCtx>, video: &Arc<Video>, client: &str, stream: u8, r: Request, limit: Limit) -> Msg {
+    apply_fitted(ctx, video, client, stream, limit.fit(r)).await
+}
+
+async fn apply_fitted(
+    ctx: &Arc<HostCtx>,
+    video: &Arc<Video>,
+    client: &str,
+    stream: u8,
+    (r, shrunk): (Request, Option<String>),
+) -> Msg {
     let Some((monitor, (cw, ch, cfps))) = video.current(stream) else {
         return info(ctx, video, stream, String::new());
+    };
+    // A note about the size limit, unless a later step has its own.
+    let info = |ctx: &HostCtx, video: &Video, stream: u8, note: String| {
+        info(ctx, video, stream, if note.is_empty() { shrunk.clone().unwrap_or_default() } else { note })
     };
     let fps = if r.refresh > 0 { (r.refresh as u32).min(240) } else { cfps };
     let scale = r.scale_pct.clamp(50, 400);
@@ -369,4 +429,36 @@ async fn kde_real(
         anyhow::bail!("{w}×{h} isn't available on {}; showing {}×{} scaled", now.name, size.0, size.1);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use qr_proto::Codec;
+    use qr_proto::msg::CodecCap;
+
+    fn req(width: u16, height: u16, scale_pct: u16) -> Request {
+        Request { width, height, refresh: 60, scale_pct, target: 0 }
+    }
+
+    #[test]
+    fn fits_requests_to_the_codec_keeping_the_desktop_size() {
+        let cap = CodecCap { codec: Codec::H264, hw: true, max_width: 0, max_height: 0, chroma444: false };
+        let h264 = Limit::new(Codec::H264, &cap);
+        // Within limits: unchanged.
+        assert_eq!(h264.fit(req(2548, 1320, 200)), (req(2548, 1320, 200), None));
+        // A 2560×1285 fullscreen window at 2×: too many macroblocks.
+        let (r, note) = h264.fit(req(5120, 2570, 200));
+        let mbs = r.width.div_ceil(16) as u32 * r.height.div_ceil(16) as u32;
+        assert!(r.width <= 4096 && mbs <= 36_864 && note.is_some(), "{r:?}");
+        assert!(r.width % 2 == 0 && r.height % 2 == 0);
+        // Same logical size (within a percent), same shape.
+        let logical = r.width as f64 / (r.scale_pct as f64 / 100.0);
+        assert!((logical - 2560.0).abs() < 26.0, "{logical}");
+        assert!((r.width as f64 / r.height as f64 - 5120.0 / 2570.0).abs() < 0.01);
+        // The client's decoder limit counts too.
+        let small = CodecCap { max_width: 1920, max_height: 1080, ..cap };
+        let (r, _) = Limit::new(Codec::H265, &small).fit(req(3840, 2160, 100));
+        assert!(r.width <= 1920 && r.height <= 1080 && r.scale_pct == 50, "{r:?}");
+    }
 }

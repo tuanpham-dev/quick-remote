@@ -53,7 +53,7 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
     // Display requests, display info and pause: protocol 1.1 and later.
     let display_aware = client_minor >= 1;
 
-    let Some((enc, _cap)) = choose_encoder(&ctx, &decoders) else {
+    let Some((enc, cap)) = choose_encoder(&ctx, &decoders) else {
         let ours: Vec<&str> = ctx.encoders.iter().map(|e| e.codec.name()).collect();
         let theirs: Vec<&str> = decoders.iter().map(|c| c.codec.name()).collect();
         let text = format!("No common codec: the host encodes {ours:?}, the client decodes {theirs:?}.");
@@ -61,6 +61,8 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
         bail!(text);
     };
 
+    // The largest picture a display request may ask for.
+    let limit = crate::display::Limit::new(enc.codec, &cap);
     let profile = path_class(&conn, &ctx.web_peers);
     let mode = ctx.display_mode(want_width, want_height, want_refresh);
     tracing::info!(client = %client_name, ?profile, encoder = enc.element, ?mode, "session start");
@@ -233,7 +235,7 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
         })
     };
     let result =
-        control_loop(&ctx, &client_key, &conn, &mut control_rx, &control_tx, &video, &files, &ctl, clipboard.as_ref(), &heard)
+        control_loop(&ctx, &client_key, limit, &conn, &mut control_rx, &control_tx, &video, &files, &ctl, clipboard.as_ref(), &heard)
             .await;
     // A virtual monitor of this client's stays for a reconnect, then goes.
     ctx.displays.release(&ctx, &client_key);
@@ -253,6 +255,7 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
 async fn control_loop(
     ctx: &Arc<HostCtx>,
     client: &str,
+    limit: crate::display::Limit,
     conn: &quinn::Connection,
     rx: &mut qr_net::session::FramedRecv,
     tx: &AsyncMutex<FramedSend>,
@@ -325,7 +328,7 @@ async fn control_loop(
             Msg::DisplayRequest { stream, width, height, refresh, scale_pct, target } => {
                 let r = crate::display::Request { width, height, refresh, scale_pct, target };
                 tracing::info!(stream, ?r, "display request");
-                let info = crate::display::apply(ctx, video, client, stream, r).await;
+                let info = crate::display::apply(ctx, video, client, stream, r, limit).await;
                 ctl(info);
             }
             Msg::Pause { paused } => {
