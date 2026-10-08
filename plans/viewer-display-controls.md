@@ -118,7 +118,7 @@ Clients choose the remote desktop's size (follow window / fixed), sharpness (pix
 **Goal:** the same settings and view in the window client.
 **Checkpoint:** `tests/e2e/native_display.sh` passes A15.
 
-- [ ] **T13 — Settings, requests, view, reconnect, pause**
+- [x] **T13 — Settings, requests, view, reconnect, pause**
   - Files: `crates/qr-client/src/app.rs`, `crates/qr-client/src/session.rs`, `crates/qr-client/src/settings.rs` (new), `crates/qr-client/src/script.rs`
   - Do: settings stored in the client config dir (`display.json`); Display menu (egui window, hotkey Ctrl+Alt+Shift+V); window resize → 300 ms debounce → `DisplayRequest` (replaces the direct `Resize`); view transform with Ctrl+wheel and Ctrl+Alt+Shift+Plus/Minus/0, drag-pan with middle button when zoomed; pointer mapping through it; reconnect loop with backoff keeping the last frame; `Pause` on minimize; script commands `display` and `zoom` for tests.
   - Depends on: T4, T5, T8

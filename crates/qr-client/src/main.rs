@@ -8,6 +8,8 @@ mod pen;
 mod render;
 mod script;
 mod session;
+mod settings;
+mod view;
 
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
@@ -257,6 +259,7 @@ fn main() -> Result<()> {
         connect: args.connect.clone(),
         pin: args.pin.clone(),
         rendezvous: args.rendezvous.clone(),
+        config_dir: dir.clone(),
     })
 }
 

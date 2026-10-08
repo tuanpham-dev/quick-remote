@@ -112,6 +112,18 @@ pub struct Shared {
     extra_frames: std::collections::HashMap<u8, u32>,
     /// The host's monitors.
     pub monitors: Vec<qr_proto::Monitor>,
+    /// What the host's desktop can do and applied (protocol 1.1+).
+    pub display: Option<DisplayState>,
+}
+
+/// The host's latest `DisplayInfo` for stream 0.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DisplayState {
+    pub kind: u8,
+    pub width: u16,
+    pub height: u16,
+    pub scale_pct: u16,
+    pub note: String,
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize)]
@@ -142,6 +154,8 @@ pub struct Connected {
     pub files: Arc<qr_net::files::Files>,
     /// Sends a control message from any thread.
     pub ctl: qr_net::files::Control,
+    /// The host's protocol minor version (display requests, pause: 1+).
+    pub host_minor: u16,
     /// Rumble from the host for the pad thread: (pad, strong, weak, ms).
     pub rumble: RumbleTx,
     /// Where extra streams' pictures go (none: they are only counted).
@@ -269,6 +283,7 @@ pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, 
         decoders: caps,
     };
     let s = client_handshake(&conn, id.fingerprint, hello, keystore, o.pin.as_deref(), o.expect_fp).await?;
+    let host_minor = s.host_minor;
     let mut rx = s.control_rx;
     let control = Arc::new(AsyncMutex::new(s.control_tx));
     let shared = Arc::new(Mutex::new(Shared {
@@ -284,6 +299,7 @@ pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, 
         audio_lat: (0.0, 0),
         extra_frames: Default::default(),
         monitors: Vec::new(),
+        display: None,
     }));
 
     // Wait for the session to start and the first stream to be announced.
@@ -588,6 +604,10 @@ pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, 
                     }
                     Ok(Msg::DisplayInfo { stream, kind, width, height, scale_pct, note }) => {
                         tracing::info!(stream, kind, width, height, scale_pct, note, "display info");
+                        if stream == 0 {
+                            shared.lock().expect("lock").display =
+                                Some(DisplayState { kind, width, height, scale_pct, note });
+                        }
                     }
                     Ok(Msg::Error { text, .. }) => {
                         let _ = end_tx.send(Some(text));
@@ -648,6 +668,7 @@ pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, 
         ctl,
         rumble,
         extra_sink,
+        host_minor,
     })
 }
 

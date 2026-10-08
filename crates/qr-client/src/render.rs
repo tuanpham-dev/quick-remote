@@ -4,7 +4,7 @@
 use qr_media::decode::{DecodedFrame, PixelFormat};
 
 const SHADER: &str = r#"
-struct U { scale: vec2<f32>, mode: u32, full_range: u32 };
+struct U { scale: vec2<f32>, offset: vec2<f32>, mode: u32, full_range: u32, pad0: u32, pad1: u32 };
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var ty: texture_2d<f32>;
 @group(0) @binding(2) var tu: texture_2d<f32>;
@@ -18,7 +18,7 @@ fn vs(@builtin(vertex_index) i: u32) -> V {
     let x = f32(i & 1u);
     let y = f32((i >> 1u) & 1u);
     var o: V;
-    o.pos = vec4<f32>((x * 2.0 - 1.0) * u.scale.x, (1.0 - y * 2.0) * u.scale.y, 0.0, 1.0);
+    o.pos = vec4<f32>((x * 2.0 - 1.0) * u.scale.x + u.offset.x, (1.0 - y * 2.0) * u.scale.y + u.offset.y, 0.0, 1.0);
     o.uv = vec2<f32>(x, y);
     return o;
 }
@@ -49,8 +49,11 @@ fn fs(i: V) -> @location(0) vec4<f32> {
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
     scale: [f32; 2],
+    /// The picture's centre in clip space (0, 0: the window's centre).
+    offset: [f32; 2],
     mode: u32,
     full_range: u32,
+    pad: [u32; 2],
 }
 
 struct Planes {
@@ -240,11 +243,26 @@ impl VideoRenderer {
     /// Draws the picture letterboxed into a `win_w × win_h` target.
     pub fn draw(&self, queue: &wgpu::Queue, pass: &mut wgpu::RenderPass<'_>, win_w: u32, win_h: u32) {
         let Some(p) = &self.planes else { return };
-        let (_, _, w, h) = fit(win_w, win_h, p.width, p.height);
+        self.draw_at(queue, pass, (win_w, win_h), fit(win_w, win_h, p.width, p.height));
+    }
+
+    /// Draws the picture into `rect` (`x, y, w, h` in target pixels) of a
+    /// `win` target; parts outside it are clipped.
+    pub fn draw_at(
+        &self,
+        queue: &wgpu::Queue,
+        pass: &mut wgpu::RenderPass<'_>,
+        win: (u32, u32),
+        (x, y, w, h): (f32, f32, f32, f32),
+    ) {
+        let Some(p) = &self.planes else { return };
+        let (ww, wh) = (win.0.max(1) as f32, win.1.max(1) as f32);
         let u = Uniforms {
-            scale: [w / win_w.max(1) as f32, h / win_h.max(1) as f32],
+            scale: [w / ww, h / wh],
+            offset: [(x + w / 2.0) / ww * 2.0 - 1.0, 1.0 - (y + h / 2.0) / wh * 2.0],
             mode: if p.format == PixelFormat::Nv12 { 0 } else { 1 },
             full_range: 0,
+            pad: [0; 2],
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));
         pass.set_pipeline(&self.pipeline);

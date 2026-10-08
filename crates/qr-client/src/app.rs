@@ -32,6 +32,8 @@ pub enum UserEvent {
     ExtraFrame,
     Discovery(Discovery),
     Connected(Arc<Connected>),
+    /// A display request is due (the window has settled; `u64`: which).
+    DisplayDue(u64),
     Ended(String),
     Failed(String),
     NeedPin(String),
@@ -83,6 +85,8 @@ pub struct Config {
     pub connect: Option<String>,
     pub pin: Option<String>,
     pub rendezvous: Option<String>,
+    /// Where display settings are kept.
+    pub config_dir: std::path::PathBuf,
 }
 
 pub struct App {
@@ -111,6 +115,17 @@ pub struct App {
     mods: ModifiersState,
     held: HashSet<u16>,
     cursor: (f64, f64),
+    // Display.
+    settings: crate::settings::Settings,
+    view: crate::view::View,
+    show_display: bool,
+    /// Bumped on each change: only the latest pending request is sent.
+    display_gen: u64,
+    last_request: Option<qr_proto::Msg>,
+    /// The session's first DisplayInfo has been answered.
+    display_started: bool,
+    custom_w: String,
+    custom_h: String,
 }
 
 const HOTKEY: ModifiersState = ModifiersState::CONTROL.union(ModifiersState::ALT).union(ModifiersState::SHIFT);
@@ -165,7 +180,18 @@ pub fn run(cfg: Config) -> Result<()> {
         mods: ModifiersState::empty(),
         held: HashSet::new(),
         cursor: (0.0, 0.0),
+        settings: Default::default(),
+        view: Default::default(),
+        show_display: false,
+        display_gen: 0,
+        last_request: None,
+        display_started: false,
+        custom_w: String::new(),
+        custom_h: String::new(),
     };
+    app.settings = crate::settings::Settings::load(&app.cfg.config_dir);
+    app.view.mode = app.settings.view;
+    (app.custom_w, app.custom_h) = (app.settings.fixed_w.to_string(), app.settings.fixed_h.to_string());
     if let Some(t) = connect {
         let pin = app.cfg.pin.clone();
         app.start_connect(t, pin);
@@ -196,14 +222,14 @@ impl App {
         });
     }
 
-    /// Reconnects with backoff (250 ms doubling to 2 s) for up to 60 s.
+    /// Reconnects after 1, 2, 4 and 8 s, then every 10 s, until it works
+    /// or the user quits; the last picture stays up meanwhile.
     fn start_reconnect(&mut self, target: String) {
         self.screen = Screen::Reconnecting { target: target.clone(), since: std::time::Instant::now() };
         let (cfg, proxy, slot) = (self.cfg.clone(), self.proxy.clone(), self.frame_slot.clone());
         let size = self.window.as_ref().map(|w| w.inner_size());
         self.rt.spawn(async move {
-            let start = std::time::Instant::now();
-            let mut wait = Duration::from_millis(250);
+            let mut wait = Duration::from_secs(1);
             loop {
                 tokio::time::sleep(wait).await;
                 match connect_once(&cfg, &target, None, size, slot.clone(), proxy.clone()).await {
@@ -211,13 +237,13 @@ impl App {
                         let _ = proxy.send_event(UserEvent::Connected(c));
                         return;
                     }
-                    Err(e) if start.elapsed() > Duration::from_secs(60) => {
-                        let _ = proxy.send_event(UserEvent::Failed(format!("Reconnecting gave up: {e:#}")));
+                    Err(e) if e.downcast_ref::<ClientAuthError>().is_some() => {
+                        let _ = proxy.send_event(UserEvent::Failed(format!("Reconnecting stopped: {e:#}")));
                         return;
                     }
                     Err(e) => tracing::info!("reconnect failed: {e:#}"),
                 }
-                wait = (wait * 2).min(Duration::from_secs(2));
+                wait = if wait >= Duration::from_secs(8) { Duration::from_secs(10) } else { wait * 2 };
             }
         });
     }
@@ -264,15 +290,156 @@ impl App {
 
     /// Maps window coordinates to stream pixels (None outside the picture).
     fn to_stream(&self, x: f64, y: f64) -> Option<(u16, u16)> {
-        let gpu = self.gpu.as_ref()?;
-        let (pw, ph) = gpu.video.size()?;
-        let (ox, oy, w, h) = fit(gpu.config.width, gpu.config.height, pw, ph);
-        let sx = (x as f32 - ox) / w * pw as f32;
-        let sy = (y as f32 - oy) / h * ph as f32;
-        if sx < 0.0 || sy < 0.0 || sx >= pw as f32 || sy >= ph as f32 {
+        self.gpu.as_ref()?.video.size()?;
+        self.view.to_remote(x, y)
+    }
+
+    /// Lays the picture out for the window as it is now.
+    fn layout_view(&mut self) {
+        let (Some(gpu), Some(w)) = (self.gpu.as_ref(), &self.window) else { return };
+        let Some(pic) = gpu.video.size() else { return };
+        let sf = w.scale_factor();
+        self.view.natural = (sf / self.settings.ratio(sf) as f64) as f32;
+        self.view.mode = self.settings.view;
+        self.view.layout((gpu.config.width, gpu.config.height), pic);
+    }
+
+    /// Asks the host for the display we want, 300 ms after the last change.
+    fn schedule_display(&mut self) {
+        self.display_gen += 1;
+        let (which, proxy) = (self.display_gen, self.proxy.clone());
+        self.rt.spawn(async move {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let _ = proxy.send_event(UserEvent::DisplayDue(which));
+        });
+    }
+
+    /// The display request for the current settings and window, if the
+    /// host takes them (protocol 1.1, a desktop that resizes).
+    fn display_request(&self) -> Option<qr_proto::Msg> {
+        use crate::settings::{SizeMode, Target};
+        let s = self.session.as_ref()?;
+        let kind = s.shared.lock().expect("lock").display.as_ref()?.kind;
+        if s.host_minor < 1 || kind == qr_proto::msg::display_kind::FIXED {
             return None;
         }
-        Some((sx as u16, sy as u16))
+        let w = self.window.as_ref()?;
+        let sf = w.scale_factor();
+        let ratio = self.settings.ratio(sf) as f64;
+        let (width, height) = match self.settings.mode {
+            SizeMode::Fixed => crate::settings::clamp_size(self.settings.fixed_w as f64, self.settings.fixed_h as f64),
+            SizeMode::Follow => {
+                let size = w.inner_size();
+                crate::settings::clamp_size(size.width as f64 / sf * ratio, size.height as f64 / sf * ratio)
+            }
+        };
+        Some(qr_proto::Msg::DisplayRequest {
+            stream: 0,
+            width,
+            height,
+            refresh: self.settings.hz as u16,
+            scale_pct: (ratio * 100.0).round() as u16,
+            target: match self.settings.target {
+                Target::Virtual => qr_proto::msg::display_target::VIRTUAL,
+                Target::Real => qr_proto::msg::display_target::REAL,
+            },
+        })
+    }
+
+    fn send_display(&mut self) {
+        let Some(m) = self.display_request() else { return };
+        if self.last_request.as_ref() == Some(&m) {
+            return;
+        }
+        tracing::info!(?m, "display request");
+        if let Some(s) = &self.session {
+            (s.ctl)(m.clone());
+        }
+        self.last_request = Some(m);
+    }
+
+    /// The Display menu (Ctrl+Alt+Shift+V): resolution, pixel ratio,
+    /// monitor and view, as in the web client.
+    fn display_menu(&mut self, ctx: &egui::Context, display: Option<&crate::session::DisplayState>) {
+        use crate::settings::{PRESETS, RATES, RATIOS, SizeMode, Target, ViewMode};
+        use qr_proto::msg::display_kind;
+        let mut s = self.settings.clone();
+        let kind = display.map(|d| d.kind);
+        let fixed = kind == Some(display_kind::FIXED);
+        let sf = self.window.as_ref().map_or(1.0, |w| w.scale_factor());
+        let mut open = true;
+        egui::Window::new("Display").open(&mut open).resizable(false).collapsible(false).show(ctx, |ui| {
+            ui.add_enabled_ui(!fixed, |ui| {
+                ui.label(egui::RichText::new("Resolution").small().weak());
+                ui.radio_value(&mut s.mode, SizeMode::Follow, "Follow window");
+                ui.horizontal(|ui| {
+                    ui.radio_value(&mut s.mode, SizeMode::Fixed, "Fixed");
+                    egui::ComboBox::from_id_salt("preset")
+                        .selected_text(format!("{}×{}", s.fixed_w, s.fixed_h))
+                        .show_ui(ui, |ui| {
+                            for (w, h) in PRESETS {
+                                if ui.selectable_label((s.fixed_w, s.fixed_h) == (w, h), format!("{w}×{h}")).clicked() {
+                                    (s.fixed_w, s.fixed_h, s.mode) = (w, h, SizeMode::Fixed);
+                                }
+                            }
+                        });
+                    egui::ComboBox::from_id_salt("hz").selected_text(format!("{} Hz", s.hz)).show_ui(ui, |ui| {
+                        for r in RATES {
+                            ui.selectable_value(&mut s.hz, r, format!("{r} Hz"));
+                        }
+                    });
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Custom");
+                    ui.add(egui::TextEdit::singleline(&mut self.custom_w).desired_width(48.0));
+                    ui.label("×");
+                    ui.add(egui::TextEdit::singleline(&mut self.custom_h).desired_width(48.0));
+                    if ui.button("Use").clicked()
+                        && let (Ok(w), Ok(h)) = (self.custom_w.trim().parse::<f64>(), self.custom_h.trim().parse::<f64>())
+                    {
+                        let (w, h) = crate::settings::clamp_size(w, h);
+                        (s.fixed_w, s.fixed_h, s.mode) = (w as u32, h as u32, SizeMode::Fixed);
+                    }
+                });
+            });
+            ui.separator();
+            ui.label(egui::RichText::new("Pixel ratio").small().weak());
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut s.ratio, 0.0, format!("Auto ({:.2}×)", sf.clamp(1.0, 2.0)));
+                for r in RATIOS {
+                    ui.selectable_value(&mut s.ratio, r, format!("{r}×"));
+                }
+            });
+            if matches!(kind, Some(display_kind::KDE | display_kind::GNOME)) {
+                ui.separator();
+                ui.label(egui::RichText::new("Monitor").small().weak());
+                ui.radio_value(&mut s.target, Target::Virtual, "Virtual monitor of its own");
+                ui.radio_value(&mut s.target, Target::Real, "The desktop's real monitor");
+            }
+            ui.separator();
+            ui.label(egui::RichText::new("View").small().weak());
+            ui.horizontal(|ui| {
+                ui.radio_value(&mut s.view, ViewMode::Fit, "Fit");
+                ui.radio_value(&mut s.view, ViewMode::Fill, "Fill window");
+                ui.radio_value(&mut s.view, ViewMode::Native, "100%");
+            });
+            ui.label(format!("Zoom {:.0}% · Ctrl+wheel, Ctrl+Alt+Shift+ + − 0", self.view.zoom * 100.0));
+            if let Some(note) = display.map(|d| d.note.as_str()).filter(|n| !n.is_empty()) {
+                ui.colored_label(egui::Color32::from_rgb(240, 183, 90), note);
+            }
+        });
+        self.show_display = open;
+        if s != self.settings {
+            self.settings = s;
+            self.settings_changed();
+        }
+    }
+
+    /// Settings changed in the menu: keep them, show, ask the host.
+    fn settings_changed(&mut self) {
+        self.settings.save(&self.cfg.config_dir);
+        self.layout_view();
+        self.send_display();
     }
 
     fn hotkey(&mut self, k: KeyCode, el: &ActiveEventLoop) -> bool {
@@ -281,6 +448,10 @@ impl App {
         }
         match k {
             KeyCode::KeyM => self.set_relative(!self.relative),
+            KeyCode::KeyV => self.show_display = !self.show_display,
+            KeyCode::Equal | KeyCode::NumpadAdd => self.view.set_zoom(self.view.zoom * 1.25, None),
+            KeyCode::Minus | KeyCode::NumpadSubtract => self.view.set_zoom(self.view.zoom / 1.25, None),
+            KeyCode::Digit0 | KeyCode::Numpad0 => self.view.set_zoom(1.0, None),
             KeyCode::KeyS => self.show_stats = !self.show_stats,
             KeyCode::KeyF => {
                 if let Some(w) = &self.window {
@@ -456,6 +627,15 @@ impl App {
         let mut connect = None;
         match self.screen.clone() {
             Screen::Session => {
+                // The host told what it can do: ask for what we want.
+                let display = self.session.as_ref().and_then(|s| s.shared.lock().expect("lock").display.clone());
+                if !self.display_started && display.is_some() {
+                    self.display_started = true;
+                    self.send_display();
+                }
+                if self.show_display {
+                    self.display_menu(ctx, display.as_ref());
+                }
                 if self.show_stats
                     && let Some(s) = &self.session
                 {
@@ -557,6 +737,23 @@ impl App {
     }
 
     fn redraw(&mut self) {
+        self.layout_view();
+        // Zoomed in: the picture follows the pointer near the window's edges.
+        if self.view.pans()
+            && !self.relative
+            && let Some(g) = self.gpu.as_ref()
+        {
+            let (w, h, (x, y)) = (g.config.width as f64, g.config.height as f64, self.cursor);
+            let edge = 32.0;
+            let v = |p: f64, hi: f64| if p < edge { 12.0 } else if p > hi - edge { -12.0 } else { 0.0 };
+            let (dx, dy) = (v(x, w), v(y, h));
+            if dx != 0.0 || dy != 0.0 {
+                self.view.pan_by(dx, dy);
+                if let Some(win) = &self.window {
+                    win.request_redraw();
+                }
+            }
+        }
         let (Some(window), Some(gpu)) = (self.window.clone(), self.gpu.as_mut()) else {
             return;
         };
@@ -607,7 +804,7 @@ impl App {
                 multiview_mask: None,
             });
             if self.screen == Screen::Session || matches!(self.screen, Screen::Reconnecting { .. }) {
-                gpu.video.draw(&gpu.queue, &mut pass, gpu.config.width, gpu.config.height);
+                gpu.video.draw_at(&gpu.queue, &mut pass, (gpu.config.width, gpu.config.height), self.view.rect());
             }
         }
         // egui on top.
@@ -795,9 +992,9 @@ impl ApplicationHandler<UserEvent> for App {
                 if let (Some(gpu), Some(s)) = (self.gpu.as_ref(), &self.session)
                     && let Some((pw, ph)) = gpu.video.size()
                 {
-                    let (ox, oy, w, h) = fit(gpu.config.width, gpu.config.height, pw, ph);
-                    let sx = (p.x as f32 - ox) / w * pw as f32;
-                    let sy = (p.y as f32 - oy) / h * ph as f32;
+                    let v = &self.view;
+                    let sx = (p.x as f32 - v.x) / v.scale;
+                    let sy = (p.y as f32 - v.y) / v.scale;
                     if sx >= 0.0 && sy >= 0.0 && sx < pw as f32 && sy < ph as f32 {
                         s.input.send(InputEvent::Pen {
                             stream: 0,
@@ -830,7 +1027,14 @@ impl ApplicationHandler<UserEvent> for App {
                 }));
                 self.session = Some(c);
                 self.screen = Screen::Session;
+                self.last_request = None;
+                self.display_started = false;
                 self.update_title();
+            }
+            UserEvent::DisplayDue(which) => {
+                if which == self.display_gen {
+                    self.send_display();
+                }
             }
             UserEvent::NeedPin(target) => self.screen = Screen::Pin { target },
             UserEvent::Failed(e) => self.screen = Screen::Error(e),
@@ -888,13 +1092,21 @@ impl ApplicationHandler<UserEvent> for App {
                     g.surface.configure(&g.device, &g.config);
                 }
                 if let (Some(s), Screen::Session) = (&self.session, &self.screen) {
-                    let c = s.control.clone();
-                    let (w, h) = (size.width as u16, size.height as u16);
-                    self.rt.spawn(async move {
-                        let m = qr_proto::Msg::Resize { stream: 0, width: w, height: h, refresh: 0 };
-                        let _ = c.lock().await.send(&m).await;
-                    });
+                    if s.host_minor >= 1 {
+                        if self.settings.mode == crate::settings::SizeMode::Follow {
+                            self.schedule_display();
+                        }
+                    } else {
+                        // An older host: its own resize message.
+                        let c = s.control.clone();
+                        let (w, h) = (size.width as u16, size.height as u16);
+                        self.rt.spawn(async move {
+                            let m = qr_proto::Msg::Resize { stream: 0, width: w, height: h, refresh: 0 };
+                            let _ = c.lock().await.send(&m).await;
+                        });
+                    }
                 }
+                self.layout_view();
             }
             WindowEvent::RedrawRequested => self.redraw(),
             WindowEvent::DroppedFile(path) => {
@@ -908,6 +1120,15 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::ModifiersChanged(m) => self.mods = m.state(),
+            // Minimized or fully covered: no video meanwhile.
+            WindowEvent::Occluded(hidden) => {
+                if let Some(s) = &self.session
+                    && s.host_minor >= 1
+                {
+                    tracing::info!(hidden, "window visibility");
+                    (s.ctl)(qr_proto::Msg::Pause { paused: hidden });
+                }
+            }
             WindowEvent::Focused(false) => {
                 self.release_all();
                 if self.relative {
@@ -952,6 +1173,15 @@ impl ApplicationHandler<UserEvent> for App {
                 if let Some(s) = &self.session {
                     s.input.send(InputEvent::Button { button: b, down: state == ElementState::Pressed });
                 }
+            }
+            WindowEvent::MouseWheel { delta, .. } if in_session && self.mods == ModifiersState::CONTROL => {
+                let steps = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y,
+                    MouseScrollDelta::PixelDelta(p) => p.y as f32 / 50.0,
+                };
+                let at = (self.cursor.0 as f32, self.cursor.1 as f32);
+                self.view.set_zoom(self.view.zoom * 1.1f32.powf(steps), Some(at));
+                tracing::info!(zoom = self.view.zoom, "view zoom");
             }
             WindowEvent::MouseWheel { delta, .. } if in_session => {
                 let (dx, dy) = match delta {
