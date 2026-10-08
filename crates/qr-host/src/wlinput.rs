@@ -104,7 +104,7 @@ delegate_noop!(State: ZwpVirtualKeyboardManagerV1);
 delegate_noop!(State: ZwpVirtualKeyboardV1);
 
 /// The default keymap as text (libxkbcommon, loaded at run time).
-fn default_keymap() -> Result<String> {
+pub(crate) fn default_keymap() -> Result<String> {
     use xkbcommon_dl::{xkb_context_flags, xkb_keymap_compile_flags, xkb_keymap_format};
     let x = xkbcommon_dl::xkbcommon_option().context("libxkbcommon is not installed")?;
     // SAFETY: libxkbcommon calls as documented; every object is released.

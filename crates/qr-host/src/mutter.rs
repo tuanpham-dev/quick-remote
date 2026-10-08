@@ -161,7 +161,17 @@ impl MutterSession {
         for c in [Call::Key(42, true), Call::Key(42, false), Call::Rel(1.0, 0.0), Call::Rel(-1.0, 0.0)] {
             let _ = tx.send(c);
         }
-        Ok(MutterInput { tx, streams: self.streams.iter().map(|s| (s.monitor.clone(), s.path.clone())).collect() })
+        // Which characters the keymap types (mutter drops other keysyms).
+        let keymap = crate::wlkeymap::socket()
+            .context("no Wayland socket")
+            .and_then(|s| crate::wlkeymap::watch(&s))
+            .inspect_err(|e| tracing::warn!("the desktop keymap is unknown ({e:#}); typing non-ASCII by code point"))
+            .ok();
+        Ok(MutterInput {
+            tx,
+            streams: self.streams.iter().map(|s| (s.monitor.clone(), s.path.clone())).collect(),
+            keymap,
+        })
     }
 
     /// The desktop's clipboard through the session's selection API. Same
@@ -328,6 +338,8 @@ pub struct MutterInput {
     tx: tokio::sync::mpsc::UnboundedSender<Call>,
     /// Monitors and their stream objects, for absolute positions.
     streams: Vec<(Monitor, OwnedObjectPath)>,
+    /// The keysyms the desktop's keymap has, when known.
+    keymap: Option<crate::wlkeymap::Keysyms>,
 }
 
 impl MutterInput {
@@ -391,11 +403,34 @@ impl Injector for MutterInput {
         Ok(())
     }
 
+    /// Characters the keymap has go as keysyms. mutter drops the others,
+    /// so they're entered by code point: Ctrl+Shift+U, hex digits, space
+    /// (IBus and GTK's own input method; most GNOME apps).
     fn text(&mut self, text: &str) -> Result<()> {
         for c in text.chars() {
             let k = keysym(c);
-            self.send(Call::Keysym(k, true))?;
-            self.send(Call::Keysym(k, false))?;
+            let typeable = c.is_ascii_control()
+                || match &self.keymap {
+                    Some(m) => m.read().unwrap().contains(&k),
+                    None => c.is_ascii(),
+                };
+            if typeable {
+                self.send(Call::Keysym(k, true))?;
+                self.send(Call::Keysym(k, false))?;
+                continue;
+            }
+            const CTRL: u32 = 29;
+            const SHIFT: u32 = 42;
+            self.send(Call::Key(CTRL, true))?;
+            self.send(Call::Key(SHIFT, true))?;
+            self.send(Call::Keysym('u' as u32, true))?;
+            self.send(Call::Keysym('u' as u32, false))?;
+            self.send(Call::Key(SHIFT, false))?;
+            self.send(Call::Key(CTRL, false))?;
+            for d in format!("{:x}", c as u32).chars().chain([' ']) {
+                self.send(Call::Keysym(d as u32, true))?;
+                self.send(Call::Keysym(d as u32, false))?;
+            }
         }
         Ok(())
     }

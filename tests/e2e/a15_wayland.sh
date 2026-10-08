@@ -11,7 +11,7 @@ fi
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 probe="$LOGDIR/probe.jsonl"
 cat >"$LOGDIR/gnome-inner.sh" <<EOS
-WAYLAND_DISPLAY=wayland-0 GDK_BACKEND=wayland python3 $here/wl_probe.py $probe >"$LOGDIR/probe.err" 2>&1 &
+QR_PROBE_IM=1 WAYLAND_DISPLAY=wayland-0 GDK_BACKEND=wayland python3 $here/wl_probe.py $probe >"$LOGDIR/probe.err" 2>&1 &
 sleep 1.5
 exec env GST_REGISTRY="$GST_REGISTRY" QR_GSO=0 "$BIN/qr-host" --listen 0.0.0.0:9450 --config-dir "$LOGDIR/ghost" --name ghost \
 	--pin 424242 --encoder vah264lpenc --source mutter --fps 60 --audio none
@@ -26,7 +26,7 @@ button 1 down
 button 1 up
 sleep 200
 tap 16
-text hello
+text héllo 漢字
 sleep 300
 abs 100 100
 sleep 200
@@ -39,7 +39,7 @@ python3 - "$probe" "$LOGDIR/a15w.jsonl" >"$LOGDIR/a15w-summary.txt" <<'PY'
 import json, sys
 L = [json.loads(l) for l in open(sys.argv[1])]
 clicks = [(e["x"], e["y"]) for e in L if e["ev"] == "button"]
-typed = "".join(e["char"] for e in L if e["ev"] == "key")
+typed = "".join(e["char"] if e["ev"] == "key" else e["text"] for e in L if e["ev"] in ("key", "commit"))
 moves = [(e["x"], e["y"]) for e in L if e["ev"] == "motion"]
 frames = sum(1 for _ in open(sys.argv[2]))
 print(f"frames={frames} click={clicks[:1]} typed={typed!r} last_motion={moves[-1] if moves else None}")
@@ -49,5 +49,5 @@ mons=$(sed 's/\x1b\[[0-9;]*m//g' "$LOGDIR/a15w-client.txt" | grep -o 'monitors=[
 s() { grep -q "$1" "$LOGDIR/a15w-summary.txt"; }
 check A15-wayland "a GNOME desktop streams through mutter's remote-desktop API ($mons, $(grep -o 'frames=[0-9]*' "$LOGDIR/a15w-summary.txt")), no permission asked" \
 	bash -c "grep -q 'Meta-0' <<<'$mons' && [[ \$(grep -o 'frames=[0-9]*' '$LOGDIR/a15w-summary.txt' | cut -d= -f2) -ge 3 ]]"
-check A15-wayland-input "input reaches a GTK app on it: click at (400, 300), keys \"qhello\", 300 relative steps from (100, 100)" \
-	bash -c "grep -q \"click=\\[(400, 300)\\] typed='qhello' last_motion=(400, 100)\" '$LOGDIR/a15w-summary.txt'"
+check A15-wayland-input "input reaches a GTK app on it: click at (400, 300), keys \"q\" and text \"héllo 漢字\" (outside the layout: by code point), 300 relative steps from (100, 100)" \
+	bash -c "grep -q \"click=\\[(400, 300)\\] typed='qhéllo 漢字' last_motion=(400, 100)\" '$LOGDIR/a15w-summary.txt'"

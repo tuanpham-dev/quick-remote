@@ -31,6 +31,8 @@ mod winservice;
 mod wlclip;
 #[cfg(target_os = "linux")]
 mod wlinput;
+#[cfg(target_os = "linux")]
+mod wlkeymap;
 // The Linux-only sources' stand-ins elsewhere.
 #[cfg(not(target_os = "linux"))]
 mod nolinux;

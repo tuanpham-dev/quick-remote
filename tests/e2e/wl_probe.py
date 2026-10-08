@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """A fullscreen GTK window that logs input as JSON lines (input tests in the
-virtual display): python3 wl_probe.py LOG"""
+virtual display): python3 wl_probe.py LOG
+QR_PROBE_IM=1: keys go through an input method first, and its commits are
+logged too (text entered by code point, Ctrl+Shift+U)."""
 import json
+import os
 import sys
 import time
 
@@ -19,7 +22,15 @@ def log(**kw):
     out.write(json.dumps(kw) + "\n")
 
 
+im = None
+if os.environ.get("QR_PROBE_IM"):
+    im = Gtk.IMContextSimple()
+    im.connect("commit", lambda _im, text: log(ev="commit", text=text))
+
+
 def key(_w, ev):
+    if im is not None and im.filter_keypress(ev):
+        return True
     c = Gdk.keyval_to_unicode(ev.keyval)
     log(ev="key", keyval=Gdk.keyval_name(ev.keyval), char=chr(c) if c else "", code=ev.hardware_keycode)
     return True
@@ -50,6 +61,11 @@ w.add_events(
     | Gdk.EventMask.SMOOTH_SCROLL_MASK
 )
 w.connect("key-press-event", key)
+if im is not None:
+    w.add_events(Gdk.EventMask.KEY_RELEASE_MASK)
+    w.connect("key-release-event", lambda _w, ev: im.filter_keypress(ev))
+    w.connect("realize", lambda _w: im.set_client_window(w.get_window()))
+    w.connect("focus-in-event", lambda *_: im.focus_in() or False)
 w.connect("button-press-event", button)
 w.connect("motion-notify-event", motion)
 w.connect("scroll-event", scroll)
