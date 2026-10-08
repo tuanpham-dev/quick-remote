@@ -85,20 +85,35 @@ pub struct Reassembler {
     pub deadline: Duration,
     stats: Stats,
     coders: crate::Coders,
+    /// Since when shards have been arriving only beyond the window (the
+    /// sender's numbering moved on without us).
+    ahead_since: Option<Time>,
 }
+
+/// After this long with every shard beyond the window, jump to them.
+const RESYNC: Duration = Duration::from_secs(1);
 
 /// Frames kept ahead of the next expected one; anything further is junk.
 const WINDOW: u32 = 512;
 
 impl Reassembler {
     pub fn new(stream: u8, deadline: Duration) -> Self {
-        Self { stream, next: 0, frames: BTreeMap::new(), deadline, stats: Stats::default(), coders: Default::default() }
+        Self {
+            stream,
+            next: 0,
+            frames: BTreeMap::new(),
+            deadline,
+            stats: Stats::default(),
+            coders: Default::default(),
+            ahead_since: None,
+        }
     }
 
     /// Restarts at frame `next` (a new stream with the same id).
     pub fn reset(&mut self, next: u32) {
         self.next = next;
         self.frames.clear();
+        self.ahead_since = None;
     }
 
     pub fn take_stats(&mut self) -> Stats {
@@ -114,8 +129,20 @@ impl Reassembler {
         let (h, payload) = VideoShardHeader::parse(datagram)?;
         self.stats.bytes_rx += datagram.len() as u64;
         self.stats.shards_rx += 1;
-        if h.stream != self.stream || h.frame >= self.next + WINDOW {
+        if h.stream != self.stream {
             return Ok(self.drain(now));
+        }
+        if h.frame >= self.next.saturating_add(WINDOW) {
+            // Far ahead: junk, unless it keeps coming (a reset to the
+            // wrong place, or a long gap): then that's where the stream is.
+            let since = *self.ahead_since.get_or_insert(now);
+            if now.saturating_sub(since) < RESYNC {
+                return Ok(self.drain(now));
+            }
+            tracing::debug!(from = self.next, to = h.frame, "resynchronising to the stream");
+            self.reset(h.frame);
+        } else {
+            self.ahead_since = None;
         }
         if h.frame < self.next {
             // Late shard of a frame already passed on: it only counts as
@@ -372,5 +399,32 @@ mod tests {
         assert_eq!(s.shards_lost, 2);
         assert_eq!(s.shards_rx, total - 2);
         assert_eq!(s.shards_repaired, 2);
+    }
+
+    #[test]
+    fn resynchronises_when_the_stream_is_far_ahead() {
+        let mut p = Packetizer::new(0, 1200, 0.1);
+        let mut r = Reassembler::new(0, Duration::from_millis(80));
+        // Reset to 0 while the sender is at frame 5000 (what a restarted
+        // web stream did): frames are junk at first, then the stream.
+        let mut got = Vec::new();
+        for i in 0..40u32 {
+            let t = Duration::from_millis(1000 + i as u64 * 50);
+            for d in p.frame(5000 + i, 0, &meta(), &au(i, 3000)) {
+                for e in r.push(&d, t).unwrap() {
+                    if let Event::Frame(f) = e {
+                        got.push(f.id);
+                    }
+                }
+            }
+        }
+        assert!(got.first().is_some_and(|f| *f >= 5000 && *f <= 5022), "{got:?}");
+        assert_eq!(got.last(), Some(&5039));
+        // Within the window nothing changes.
+        r.reset(6000);
+        let d = p.frame(6001, 0, &meta(), &au(1, 100));
+        let n: usize = d.iter().map(|d| r.push(d, Duration::from_secs(9)).unwrap().len()).sum();
+        assert_eq!(r.next_expected(), 6000);
+        let _ = n;
     }
 }

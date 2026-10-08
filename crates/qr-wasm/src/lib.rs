@@ -98,9 +98,12 @@ impl WebReassembler {
         WebReassembler { r: Reassembler::new(0, Duration::from_millis(deadline_ms as u64)), out: Default::default() }
     }
 
-    /// Starts over at frame 0 (a new stream).
+    /// Drops what is in flight (a restarted stream); frame numbering goes on.
     pub fn reset(&mut self) {
-        self.r.reset(0);
+        // The host numbers frames on across a stream's restarts: keep the
+        // position (resetting to 0 dropped every later frame).
+        let next = self.r.next_expected();
+        self.r.reset(next);
         self.out.clear();
     }
 

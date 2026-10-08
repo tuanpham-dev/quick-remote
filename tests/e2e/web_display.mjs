@@ -70,9 +70,18 @@ try {
   const a1a = s.width === aw && s.height === ah;
   const first = `${aw}×${ah}`;
   await viewport(1000, 700);
-  await sleep(100);
-  [aw, ah] = await area();
-  const took = await waitSize(aw, ah, 4000);
+  const resized = Date.now();
+  // The bar may wrap to a second row once the window is narrow, a moment
+  // after the resize: the area is what it settles at.
+  let prev = "";
+  for (let i = 0; i < 20; i++) {
+    await sleep(100);
+    [aw, ah] = await area();
+    if (`${aw}x${ah}` === prev) break;
+    prev = `${aw}x${ah}`;
+  }
+  await waitSize(aw, ah, 4000);
+  const took = Date.now() - resized;
   s = await st();
   check("A1", `the desktop follows the window (1400×900 window → ${first}: ${a1a}; 1000×700 window → ${s.width}×${s.height} after ${took} ms, area ${aw}×${ah})`,
     a1a && s.width === aw && s.height === ah && took <= 1500);

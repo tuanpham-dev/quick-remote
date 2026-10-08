@@ -303,7 +303,7 @@ export class WebReassembler {
         return ret >>> 0;
     }
     /**
-     * Starts over at frame 0 (a new stream).
+     * Drops what is in flight (a restarted stream); frame numbering goes on.
      */
     reset() {
         wasm.webreassembler_reset(this.__wbg_ptr);

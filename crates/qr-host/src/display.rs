@@ -148,27 +148,26 @@ impl Limit {
         }
     }
 
-    /// `r` shrunk to fit, its scale lowered by as much so the desktop keeps
-    /// its logical size; with a note saying so when it had to shrink.
+    /// `r` brought within the limits: each side over its maximum is cut to
+    /// it (the pixel ratio stays), then, past the codec's frame size, both
+    /// shrink together. With a note saying so when anything changed.
     pub fn fit(&self, r: Request) -> (Request, Option<String>) {
-        let (w, h) = (r.width.max(1) as f64, r.height.max(1) as f64);
+        let even = |v: f64| ((v.floor() as u32).max(2) & !1) as u16;
+        let mut w = (r.width as u32).min(self.width & !1) as f64;
+        let mut h = (r.height as u32).min(self.height & !1) as f64;
         let mbs = (w / 16.0).ceil() * (h / 16.0).ceil();
-        let f = (self.width as f64 / w).min(self.height as f64 / h).min((self.mbs as f64 / mbs).sqrt()).min(1.0);
-        if f >= 1.0 {
+        if mbs > self.mbs as f64 {
+            // A little under, so rounding up to whole macroblocks fits.
+            let f = (self.mbs as f64 / mbs).sqrt() * 0.995;
+            (w, h) = (w * f, h * f);
+        }
+        let out = Request { width: even(w), height: even(h), ..r };
+        if (out.width, out.height) == (r.width & !1, r.height & !1) {
             return (r, None);
         }
-        // A little under, so rounding up to whole macroblocks still fits.
-        let f = f * 0.995;
-        let even = |v: f64| ((v.floor() as u16) & !1).max(2);
-        let out = Request {
-            width: even(w * f),
-            height: even(h * f),
-            scale_pct: ((r.scale_pct as f64 * f).round() as u16).max(50),
-            ..r
-        };
         let note = format!(
-            "{}×{} is more than this connection's video can carry; using {}×{} at {}% (the same desktop space), scaled to your window.",
-            r.width, r.height, out.width, out.height, out.scale_pct
+            "{}×{} is more than this connection's video can carry; using {}×{}, the largest it takes, fitted to your window.",
+            r.width, r.height, out.width, out.height
         );
         (out, Some(note))
     }
@@ -451,26 +450,23 @@ mod tests {
     }
 
     #[test]
-    fn fits_requests_to_the_codec_keeping_the_desktop_size() {
+    fn fits_requests_to_the_largest_size_the_codec_takes() {
         let cap = CodecCap { codec: Codec::H264, hw: true, max_width: 0, max_height: 0, chroma444: false };
         let h264 = Limit::new(&enc(Codec::H264, 16384), &cap);
         // Within limits: unchanged.
         assert_eq!(h264.fit(req(2548, 1320, 200)), (req(2548, 1320, 200), None));
-        // A 2560×1285 fullscreen window at 2×: too many macroblocks.
-        let (r, note) = h264.fit(req(5120, 2570, 200));
-        let mbs = r.width.div_ceil(16) as u32 * r.height.div_ceil(16) as u32;
-        assert!(r.width <= 4096 && mbs <= 36_864 && note.is_some(), "{r:?}");
-        assert!(r.width % 2 == 0 && r.height % 2 == 0);
-        // Same logical size (within a percent), same shape.
-        let logical = r.width as f64 / (r.scale_pct as f64 / 100.0);
-        assert!((logical - 2560.0).abs() < 26.0, "{logical}");
-        assert!((r.width as f64 / r.height as f64 - 5120.0 / 2570.0).abs() < 0.01);
-        // The client's decoder limit counts too.
-        let small = CodecCap { max_width: 1920, max_height: 1080, ..cap };
-        let (r, _) = Limit::new(&enc(Codec::H265, 16384), &small).fit(req(3840, 2160, 100));
-        assert!(r.width <= 1920 && r.height <= 1080 && r.scale_pct == 50, "{r:?}");
-        // And the encoder's: H.265 on a 4096-wide GPU takes 5K at 4096 wide.
+        // Only the side over its maximum is cut; the pixel ratio stays.
+        let tall = CodecCap { max_width: 4096, max_height: 2304, ..cap };
+        let (r, note) = Limit::new(&enc(Codec::H265, 16384), &tall).fit(req(2548, 2558, 200));
+        assert_eq!((r.width, r.height, r.scale_pct), (2548, 2304, 200));
+        assert!(note.is_some());
+        // H.265 on a 4096-wide GPU: 5K becomes 4096 wide, full height.
         let (r, _) = Limit::new(&enc(Codec::H265, 4096), &cap).fit(req(5120, 2570, 200));
-        assert!(r.width <= 4096 && r.width >= 4070 && r.scale_pct == 159, "{r:?}");
+        assert_eq!((r.width, r.height, r.scale_pct), (4096, 2570, 200));
+        // H.264's frame-size limit then shrinks both sides together.
+        let (r, _) = h264.fit(req(5120, 2570, 200));
+        let mbs = r.width.div_ceil(16) as u32 * r.height.div_ceil(16) as u32;
+        assert!(r.width <= 4096 && mbs <= 36_864 && mbs > 35_000, "{r:?}");
+        assert!(r.width % 2 == 0 && r.height % 2 == 0);
     }
 }

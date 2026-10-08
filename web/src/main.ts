@@ -438,7 +438,19 @@ async function decoderCaps(): Promise<CodecCap[]> {
     for (const hw of [true, false]) {
       try {
         const r = await VideoDecoder.isConfigSupported({ codec: s, hardwareAcceleration: hw ? "prefer-hardware" : "prefer-software" });
-        if (r.supported) { out.push({ codec, hw, maxWidth: 4096, maxHeight: 2304, chroma444: false }); break; }
+        if (r.supported) {
+          // The largest picture this decoder takes (Chrome checks the
+          // coded size against what the hardware reports).
+          let [maxWidth, maxHeight] = [1920, 1080];
+          for (const [w, h] of [[8192, 4352], [7680, 4320], [4096, 4096], [4096, 2304]]) {
+            const big = await VideoDecoder.isConfigSupported({
+              codec: s, codedWidth: w, codedHeight: h, hardwareAcceleration: hw ? "prefer-hardware" : "prefer-software",
+            }).catch(() => ({ supported: false }));
+            if (big.supported) { [maxWidth, maxHeight] = [w, h]; break; }
+          }
+          out.push({ codec, hw, maxWidth, maxHeight, chroma444: false });
+          break;
+        }
       } catch { /* unsupported */ }
     }
   }
