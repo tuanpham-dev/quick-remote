@@ -93,22 +93,22 @@ Clients choose the remote desktop's size (follow window / fixed), sharpness (pix
 **Goal:** all web behaviors in the spec.
 **Checkpoint:** `node tests/e2e/web_display.mjs` passes A1, A2, A8–A14, A21 (web part).
 
-- [ ] **T9 — Settings model + Display popover**
+- [x] **T9 — Settings model + Display popover**
   - Files: `web/src/settings.ts` (new), `web/src/main.ts`, `web/index.html`, `web/src/style.css` or inline styles in `index.html`
   - Do: settings {mode: follow|fixed, fixed {w,h,hz}, ratio: auto|1|1.5|2, target: virtual|real, view: fit|fill|native}, localStorage with try/catch; popover per the spec mock; `DisplayInfo` drives which rows show (kind 0 disables resolution with the note; kind 1 hides target) and shows notes.
   - Depends on: T4
   - Done when: the popover renders in headless Chrome, values survive a reload.
-- [ ] **T10 — Requests, view transform, zoom/pan, pointer mapping**
+- [x] **T10 — Requests, view transform, zoom/pan, pointer mapping**
   - Files: `web/src/main.ts`, `web/src/view.ts` (new)
   - Do: ResizeObserver + settings changes → 300 ms debounce → `DisplayRequest` (CSS size × ratio, even); `View` class holds base scale (fit/fill/native) × zoom (0.25–4) and pan; Ctrl+wheel and +/− buttons; drag-to-pan when larger than the canvas area with the middle of the view stable on zoom; all pointer events map through `View.toRemote(x, y)`.
   - Depends on: T9
   - Done when: A1, A2, A8 pass.
-- [ ] **T11 — Reconnect + pause while hidden**
+- [x] **T11 — Reconnect + pause while hidden**
   - Files: `web/src/main.ts`
   - Do: on `wt.closed` keep canvas, overlay "Reconnecting…", retry 1/2/4/8/10 s with the stored browser key (no PIN), re-send settings; `visibilitychange` → `Pause`.
   - Depends on: T8, T10
   - Done when: A10, A11 pass.
-- [ ] **T12 — Touch + keyboard strip + keyboard lock**
+- [x] **T12 — Touch + keyboard strip + keyboard lock**
   - Files: `web/src/touch.ts` (new), `web/src/main.ts`, `web/index.html`
   - Do: gesture recognizer per R18 (tap, 500 ms long press with 10 px slop, 2-finger tap/drag, 3-finger tap, 4-finger tap, pinch → `View`); toolbar for touch devices (`pointer: coarse`); hidden textarea for the soft keyboard sending `Text` input; extra-keys strip with sticky modifiers (tap = once, double-tap = lock); fullscreen button calls `navigator.keyboard.lock()` when present; Escape held 1 s exits.
   - Depends on: T10

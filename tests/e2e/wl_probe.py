@@ -32,7 +32,8 @@ def key(_w, ev):
     if im is not None and im.filter_keypress(ev):
         return True
     c = Gdk.keyval_to_unicode(ev.keyval)
-    log(ev="key", keyval=Gdk.keyval_name(ev.keyval), char=chr(c) if c else "", code=ev.hardware_keycode)
+    log(ev="key", keyval=Gdk.keyval_name(ev.keyval), char=chr(c) if c else "", code=ev.hardware_keycode,
+        ctrl=bool(ev.state & Gdk.ModifierType.CONTROL_MASK))
     return True
 
 

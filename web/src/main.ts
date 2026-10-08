@@ -3,9 +3,12 @@
 import { authenticate, CertChanged, PinNeeded, wasm } from "./auth.ts";
 import { EVDEV } from "./keymap.ts";
 import {
-  ClipKind, Codec, Kind, Mode, PROTO_MAJOR, PROTO_MINOR, decodeAudio, decodeMsg, encodeInput, encodeMotion, encodeMsg,
-  encodePad, type CodecCap, type InputEvent, type Msg,
+  ClipKind, Codec, DisplayKind, DisplayTarget, Kind, Mode, PROTO_MAJOR, PROTO_MINOR, decodeAudio, decodeMsg, encodeInput,
+  encodeMotion, encodeMsg, encodePad, type CodecCap, type InputEvent, type Msg,
 } from "./proto.ts";
+import * as cfg from "./settings.ts";
+import { attachTouch } from "./touch.ts";
+import { View } from "./view.ts";
 import { FramedReader, FramedWriter } from "./transport.ts";
 import { WebReassembler } from "./wasm/qr_wasm.js";
 
@@ -18,6 +21,19 @@ const pinBox = $<HTMLFormElement>("pin");
 const pinInput = $<HTMLInputElement>("pin-input");
 const startBtn = $<HTMLButtonElement>("start");
 const fileInput = $<HTMLInputElement>("file");
+const stage = $<HTMLDivElement>("stage");
+const banner = $<HTMLDivElement>("banner");
+// The picture ends above the bar (the bar would hide and swallow clicks on
+// the desktop's bottom strip); its height changes as it wraps.
+const bar = $<HTMLDivElement>("bar");
+new ResizeObserver(() => { stage.style.bottom = `${bar.offsetHeight}px`; }).observe(bar);
+
+// What size and look the user wants (kept in this browser), and how the
+// picture sits in the page.
+let settings = cfg.load();
+const view = new View(stage, canvas);
+view.mode = settings.view;
+view.ratio = cfg.effectiveRatio(settings);
 
 const nowUs = () => Math.round(performance.now() * 1000);
 const say = (s: string) => { status.textContent = s; };
@@ -26,6 +42,7 @@ const say = (s: string) => { status.textContent = s; };
 const stats = {
   fps: 0, kbps: 0, decoded: 0, lost: 0, repaired: 0, decoder: "", codec: "", path: "", rttMs: 0,
   decodeMs: 0, totalMs: 0, audioPackets: 0, width: 0, height: 0, connected: false, error: "",
+  displayKind: -1, displayNote: "", zoom: 1, reconnects: 0,
 };
 (window as unknown as { qrStats: typeof stats }).qrStats = stats;
 
@@ -52,6 +69,10 @@ class Session {
   files = new Map<number, File>();
   nextFileId = 1;
   closed = false;
+  /** The host's protocol minor version: display requests and pause need 1+. */
+  hostMinor = 0;
+  /** The user quit (no reconnect). */
+  quit = false;
   /** One writer for all outgoing datagrams (a stream allows only one). */
   dgw: WritableStreamDefaultWriter<Uint8Array>;
 
@@ -104,7 +125,11 @@ class Session {
 
   onMsg(m: Msg): void {
     switch (m.t) {
-      case "HelloAck": say(`Connected to ${m.name}`); break;
+      case "HelloAck":
+        say(`Connected to ${m.name}`);
+        this.hostMinor = m.minor;
+        break;
+      case "DisplayInfo": onDisplayInfo(m); break;
       case "SessionStart":
         stats.path = ["", "LAN", "Direct", "Relayed"][m.path] ?? "";
         stats.connected = true;
@@ -115,6 +140,7 @@ class Session {
         canvas.height = m.height;
         stats.width = m.width;
         stats.height = m.height;
+        view.layout();
         this.reasm.reset();
         this.needKey = true;
         this.decoder?.close();
@@ -457,14 +483,21 @@ class AudioPipe {
 const HOTKEY = (e: KeyboardEvent) => e.ctrlKey && e.altKey && e.shiftKey;
 const held = new Set<number>();
 
+let escTimer: number | undefined;
 window.addEventListener("keydown", (e) => {
   const s = session;
+  if (e.target === kbd) return;
+  // Fullscreen locks the keyboard (Escape goes to the desktop): holding
+  // Escape for a second leaves it.
+  if (e.code === "Escape" && document.fullscreenElement && !e.repeat) {
+    escTimer = window.setTimeout(() => { void document.exitFullscreen(); }, 1000);
+  }
   if (!s || s.closed) return;
   if (HOTKEY(e)) {
     const handled = { KeyM: () => toggleLock(), KeyS: () => overlay.classList.toggle("hidden"),
-      KeyF: () => (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen()),
+      KeyF: () => toggleFullscreen(),
       KeyT: () => { s.sharp = !s.sharp; void s.send({ t: "SetMode", modes: s.sharp ? Mode.SHARP_TEXT : 0 }); },
-      KeyQ: () => { void s.send({ t: "Bye" }); s.end("Disconnected."); } }[e.code];
+      KeyQ: () => { s.quit = true; void s.send({ t: "Bye" }); s.end("Disconnected."); } }[e.code];
     if (handled) { handled(); e.preventDefault(); return; }
   }
   const code = EVDEV[e.code];
@@ -474,6 +507,8 @@ window.addEventListener("keydown", (e) => {
   s.sendInput({ t: "Key", code, down: true });
 });
 window.addEventListener("keyup", (e) => {
+  if (e.code === "Escape" && escTimer !== undefined) { clearTimeout(escTimer); escTimer = undefined; }
+  if (e.target === kbd) return;
   const code = EVDEV[e.code];
   if (code === undefined || !session) return;
   e.preventDefault();
@@ -486,29 +521,59 @@ window.addEventListener("blur", () => {
 });
 
 function streamPos(e: MouseEvent): [number, number] | null {
-  const r = canvas.getBoundingClientRect();
-  const s = Math.min(r.width / canvas.width, r.height / canvas.height);
-  const w = canvas.width * s, h = canvas.height * s;
-  const x = (e.clientX - r.left - (r.width - w) / 2) / s;
-  const y = (e.clientY - r.top - (r.height - h) / 2) / s;
-  if (x < 0 || y < 0 || x >= canvas.width || y >= canvas.height) return null;
-  return [Math.floor(x), Math.floor(y)];
+  return view.toRemote(e.clientX, e.clientY);
 }
 
 canvas.addEventListener("mousemove", (e) => {
   const s = session;
+  edgePan(e);
   if (!s) return;
   if (document.pointerLockElement === canvas) s.motion(e.movementX, e.movementY, null);
   else { const p = streamPos(e); if (p) s.motion(0, 0, p); }
 });
+
+// While zoomed in, the picture follows the pointer near the stage's edges.
+let panVel = [0, 0];
+let panning = false;
+function edgePan(e: MouseEvent): void {
+  if (!view.pans() || document.pointerLockElement === canvas) { panVel = [0, 0]; return; }
+  const r = stage.getBoundingClientRect();
+  const edge = 32, speed = 12;
+  const v = (p: number, lo: number, hi: number) => (p < lo + edge ? speed : p > hi - edge ? -speed : 0);
+  panVel = [v(e.clientX, r.left, r.right), v(e.clientY, r.top, r.bottom)];
+  if ((panVel[0] || panVel[1]) && !panning) {
+    panning = true;
+    const step = () => {
+      if (!panVel[0] && !panVel[1]) { panning = false; return; }
+      view.panBy(panVel[0], panVel[1]);
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+}
+canvas.addEventListener("mouseleave", () => { panVel = [0, 0]; });
 const BUTTON = [1, 2, 3, 4, 5];
-canvas.addEventListener("mousedown", (e) => { session?.sendInput({ t: "Button", button: BUTTON[e.button] ?? 1, down: true }); e.preventDefault(); });
-canvas.addEventListener("mouseup", (e) => { session?.sendInput({ t: "Button", button: BUTTON[e.button] ?? 1, down: false }); e.preventDefault(); });
+canvas.addEventListener("mousedown", (e) => {
+  if ((e as PointerEvent).pointerType === "touch") return;
+  session?.sendInput({ t: "Button", button: BUTTON[e.button] ?? 1, down: true });
+  e.preventDefault();
+});
+canvas.addEventListener("mouseup", (e) => {
+  if ((e as PointerEvent).pointerType === "touch") return;
+  session?.sendInput({ t: "Button", button: BUTTON[e.button] ?? 1, down: false });
+  e.preventDefault();
+});
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
-canvas.addEventListener("wheel", (e) => {
+stage.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  // Ctrl+wheel (and a trackpad pinch, which arrives as one): view zoom.
+  if (e.ctrlKey) {
+    view.setZoom(view.zoom * Math.exp(-e.deltaY * (e.deltaMode ? 0.1 : 0.002)), [e.clientX, e.clientY]);
+    return;
+  }
+  if (!streamPos(e)) return;
   const k = e.deltaMode === 1 ? 120 : e.deltaMode === 2 ? 1200 : 1.2;
   session?.sendInput({ t: "Wheel", dx: Math.round(-e.deltaX * k), dy: Math.round(-e.deltaY * k) });
-  e.preventDefault();
 }, { passive: false });
 
 function toggleLock(): void {
@@ -576,9 +641,39 @@ async function connect(pin: string | null, retried = false): Promise<void> {
   pinBox.hidden = true;
   const s = new Session(wt);
   session = s;
+  lastRequest = "";
+  infoSeen = false;
+  attempt = 0;
+  banner.hidden = true;
   if (startedAudio) s.audio = new AudioPipe();
   await s.start();
-  wt.closed.then(() => s.end("Connection closed."), () => s.end("Connection lost."));
+  wt.closed.then(
+    (info) => {
+      s.end("Connection closed.");
+      // Another viewer took over: leave it to them.
+      if ((info as WebTransportCloseInfo)?.reason === "replaced") { say("Another viewer took over this desktop."); return; }
+      if (!s.quit) reconnect();
+    },
+    () => { s.end("Connection lost."); if (!s.quit) reconnect(); },
+  );
+}
+
+// Reconnecting: keep the last picture, try again after 1, 2, 4, 8, then
+// every 10 seconds (a paired browser needs no PIN).
+let attempt = 0;
+let reconnectTimer: number | undefined;
+function reconnect(): void {
+  if (reconnectTimer !== undefined) return;
+  const delay = [1, 2, 4, 8][attempt] ?? 10;
+  attempt++;
+  stats.reconnects++;
+  banner.textContent = `Reconnecting… (in ${delay} s)`;
+  banner.hidden = false;
+  reconnectTimer = window.setTimeout(() => {
+    reconnectTimer = undefined;
+    banner.textContent = "Reconnecting…";
+    connect(null).catch(() => reconnect());
+  }, delay * 1000);
 }
 
 let startedAudio = false;
@@ -597,6 +692,263 @@ pinBox.addEventListener("submit", (e) => {
   connect(pin).catch((err) => { stats.error = String(err); say(String(err.message ?? err)); });
 });
 
+// Display: what the host can do (DisplayInfo) and what we ask for.
+let lastRequest = "";
+let requestTimer: number | undefined;
+let infoSeen = false;
+
+function onDisplayInfo(m: Extract<Msg, { t: "DisplayInfo" }>): void {
+  if (m.stream !== 0) return;
+  stats.displayKind = m.kind;
+  stats.displayNote = m.note;
+  const fixed = m.kind === DisplayKind.FIXED;
+  $<HTMLFieldSetElement>("res-set").disabled = fixed;
+  $<HTMLFieldSetElement>("target-set").hidden = !(m.kind === DisplayKind.KDE || m.kind === DisplayKind.GNOME);
+  $<HTMLDivElement>("display-note").textContent = m.note;
+  if (m.note) say(m.note);
+  if (!infoSeen) {
+    infoSeen = true;
+    requestDisplay(true);
+  }
+}
+
+/** The size, refresh, scale and target to ask the host for. */
+function wanted(): { width: number; height: number; refresh: number; scalePct: number; target: number } {
+  const ratio = cfg.effectiveRatio(settings);
+  const [sw, sh] = view.stageSize();
+  const [width, height] = settings.mode === "fixed" ? cfg.clampSize(settings.fixedW, settings.fixedH) : cfg.clampSize(sw * ratio, sh * ratio);
+  return {
+    width, height, refresh: settings.hz, scalePct: Math.round(ratio * 100),
+    target: settings.target === "real" ? DisplayTarget.REAL : DisplayTarget.VIRTUAL,
+  };
+}
+
+/** Asks the host for the display we want, 300 ms after the last change. */
+function requestDisplay(now = false): void {
+  if (requestTimer !== undefined) clearTimeout(requestTimer);
+  requestTimer = window.setTimeout(() => {
+    requestTimer = undefined;
+    const s = session;
+    if (!s || s.closed || s.hostMinor < 1 || stats.displayKind < 0 || stats.displayKind === DisplayKind.FIXED) return;
+    const w = wanted();
+    const key = JSON.stringify(w);
+    if (key === lastRequest) return;
+    lastRequest = key;
+    void s.send({ t: "DisplayRequest", stream: 0, ...w });
+  }, now ? 0 : 300);
+}
+
+new ResizeObserver(() => { if (settings.mode === "follow") requestDisplay(); }).observe(stage);
+window.matchMedia?.(`(resolution: ${window.devicePixelRatio}dppx)`).addEventListener?.("change", () => {
+  view.ratio = cfg.effectiveRatio(settings);
+  view.layout();
+  requestDisplay();
+});
+
+// The Display popover.
+const displayForm = $<HTMLFormElement>("display");
+const displayBtn = $<HTMLButtonElement>("display-btn");
+const preset = $<HTMLSelectElement>("preset");
+const hzSel = $<HTMLSelectElement>("hz");
+for (const [w, h] of cfg.PRESETS) preset.add(new Option(`${w}×${h}`, `${w}x${h}`));
+preset.add(new Option("Custom", "custom"));
+for (const r of cfg.RATES) hzSel.add(new Option(`${r} Hz`, String(r)));
+
+function showSettings(): void {
+  const set = (name: string, v: string) => {
+    for (const el of displayForm.querySelectorAll<HTMLInputElement>(`input[name=${name}]`)) el.checked = el.value === v;
+  };
+  set("mode", settings.mode);
+  set("target", settings.target);
+  set("view", settings.view);
+  const key = `${settings.fixedW}x${settings.fixedH}`;
+  preset.value = cfg.PRESETS.some(([w, h]) => `${w}x${h}` === key) ? key : "custom";
+  hzSel.value = String(settings.hz);
+  $<HTMLInputElement>("cw").value = String(settings.fixedW);
+  $<HTMLInputElement>("ch").value = String(settings.fixedH);
+  for (const b of displayForm.querySelectorAll<HTMLButtonElement>("[data-ratio]")) {
+    b.setAttribute("aria-pressed", String(b.dataset.ratio === String(settings.ratio)));
+  }
+  $<HTMLButtonElement>("ratio-auto").textContent = `Auto (${cfg.deviceRatio()}×)`;
+}
+
+function applySettings(next: Partial<cfg.Settings>): void {
+  settings = { ...settings, ...next };
+  cfg.save(settings);
+  view.mode = settings.view;
+  view.ratio = cfg.effectiveRatio(settings);
+  view.layout();
+  showSettings();
+  requestDisplay(true);
+}
+
+displayBtn.addEventListener("click", () => {
+  displayForm.hidden = !displayForm.hidden;
+  displayBtn.setAttribute("aria-expanded", String(!displayForm.hidden));
+  showSettings();
+});
+displayForm.addEventListener("change", (e) => {
+  const t = e.target as HTMLInputElement;
+  if (t.name === "mode") applySettings({ mode: t.value as cfg.Settings["mode"] });
+  else if (t.name === "target") applySettings({ target: t.value as cfg.Settings["target"] });
+  else if (t.name === "view") applySettings({ view: t.value as cfg.ViewMode });
+  else if (t === preset as unknown as HTMLInputElement && preset.value !== "custom") {
+    const [w, h] = preset.value.split("x").map(Number);
+    applySettings({ mode: "fixed", fixedW: w, fixedH: h });
+  } else if (t === hzSel as unknown as HTMLInputElement) applySettings({ hz: Number(hzSel.value) });
+});
+$<HTMLButtonElement>("custom-apply").addEventListener("click", () => {
+  const [w, h] = cfg.clampSize(Number($<HTMLInputElement>("cw").value), Number($<HTMLInputElement>("ch").value));
+  applySettings({ mode: "fixed", fixedW: w, fixedH: h });
+});
+for (const b of displayForm.querySelectorAll<HTMLButtonElement>("[data-ratio]")) {
+  b.addEventListener("click", () => {
+    const r = b.dataset.ratio === "auto" ? "auto" : (Number(b.dataset.ratio) as 1 | 1.5 | 2);
+    applySettings({ ratio: r });
+  });
+}
+// Close on Escape or a click outside (that click isn't passed on).
+document.addEventListener("pointerdown", (e) => {
+  if (!displayForm.hidden && !displayForm.contains(e.target as Node) && e.target !== displayBtn && e.target !== $("t-display")) {
+    displayForm.hidden = true;
+    displayBtn.setAttribute("aria-expanded", "false");
+    e.stopPropagation();
+    e.preventDefault();
+  }
+}, true);
+displayForm.addEventListener("keydown", (e) => { if (e.key === "Escape") { displayForm.hidden = true; e.stopPropagation(); } });
+
+// Zoom.
+const zoomPct = $<HTMLSpanElement>("zoom-pct");
+const tZoom = $<HTMLButtonElement>("t-zoom");
+view.onChange = () => {
+  stats.zoom = view.zoom;
+  const t = `${Math.round(view.zoom * 100)}%`;
+  zoomPct.textContent = t;
+  tZoom.textContent = t;
+  canvas.classList.toggle("pixelated", view.scale * cfg.effectiveRatio(settings) >= 2);
+};
+$<HTMLButtonElement>("zoom-in").addEventListener("click", () => view.setZoom(view.zoom * 1.25));
+$<HTMLButtonElement>("zoom-out").addEventListener("click", () => view.setZoom(view.zoom / 1.25));
+zoomPct.addEventListener("click", () => view.setZoom(1));
+tZoom.addEventListener("click", () => view.setZoom(1));
+(window as unknown as { qrView: View }).qrView = view;
+
+// Pause while hidden: no video while nobody can see it.
+document.addEventListener("visibilitychange", () => {
+  const s = session;
+  if (!s || s.closed || s.hostMinor < 1) return;
+  void s.send({ t: "Pause", paused: document.hidden });
+});
+
+// Fullscreen, with the keyboard locked so browser shortcuts reach the
+// desktop (Chromium); hold Escape to leave.
+async function toggleFullscreen(): Promise<void> {
+  if (document.fullscreenElement) { await document.exitFullscreen(); return; }
+  await document.documentElement.requestFullscreen().catch(() => {});
+  const kb = (navigator as unknown as { keyboard?: { lock?: () => Promise<void> } }).keyboard;
+  await kb?.lock?.().catch(() => {});
+}
+$<HTMLButtonElement>("fs").addEventListener("click", () => void toggleFullscreen());
+document.addEventListener("fullscreenchange", () => {
+  if (!document.fullscreenElement) {
+    (navigator as unknown as { keyboard?: { unlock?: () => void } }).keyboard?.unlock?.();
+    say("Left fullscreen.");
+  } else {
+    say("Fullscreen: hold Escape to leave.");
+  }
+});
+
+// Touch: gestures on the picture, a toolbar, and the phone keyboard with a
+// strip of extra keys.
+const coarse = window.matchMedia?.("(pointer: coarse)").matches ?? false;
+const touchbar = $<HTMLDivElement>("touchbar");
+const keys = $<HTMLDivElement>("keys");
+const kbd = $<HTMLTextAreaElement>("kbd");
+touchbar.hidden = !coarse;
+const sticky = new Set<number>();
+let lockedMods = new Set<number>();
+let lastModTap = { code: 0, at: 0 };
+
+function tapKey(code: number): void {
+  const s = session;
+  if (!s) return;
+  const mods = [...sticky];
+  for (const m of mods) s.sendInput({ t: "Key", code: m, down: true });
+  s.sendInput({ t: "Key", code, down: true });
+  s.sendInput({ t: "Key", code, down: false });
+  for (const m of mods.reverse()) s.sendInput({ t: "Key", code: m, down: false });
+  // One-shot modifiers end after a key; locked ones stay.
+  for (const m of [...sticky]) if (!lockedMods.has(m)) sticky.delete(m);
+  showMods();
+}
+function showMods(): void {
+  for (const b of keys.querySelectorAll<HTMLButtonElement>("[data-mod]")) {
+    const m = Number(b.dataset.mod);
+    b.setAttribute("aria-pressed", String(sticky.has(m)));
+    b.style.fontWeight = lockedMods.has(m) ? "700" : "";
+  }
+}
+for (const b of keys.querySelectorAll<HTMLButtonElement>("button")) {
+  b.addEventListener("pointerdown", (e) => e.preventDefault()); // keep the keyboard up
+  b.addEventListener("click", () => {
+    if (b.dataset.key) { tapKey(Number(b.dataset.key)); return; }
+    const m = Number(b.dataset.mod);
+    const now = performance.now();
+    if (lastModTap.code === m && now - lastModTap.at < 350) {
+      // Double tap: lock until tapped again.
+      lockedMods.add(m);
+      sticky.add(m);
+    } else if (sticky.has(m)) {
+      sticky.delete(m);
+      lockedMods.delete(m);
+    } else {
+      sticky.add(m);
+    }
+    lastModTap = { code: m, at: now };
+    showMods();
+  });
+}
+
+// Letters and digits typed with a sticky modifier go as keys (Ctrl+C);
+// everything else as text, whatever the desktop's layout.
+const CHAR_KEY: Record<string, number> = {};
+for (const ch of "abcdefghijklmnopqrstuvwxyz") CHAR_KEY[ch] = EVDEV[`Key${ch.toUpperCase()}`];
+for (const ch of "0123456789") CHAR_KEY[ch] = EVDEV[`Digit${ch}`];
+kbd.addEventListener("beforeinput", (e) => {
+  const s = session;
+  e.preventDefault();
+  if (!s) return;
+  const ie = e;
+  if (ie.inputType === "insertText" || ie.inputType === "insertCompositionText" || ie.inputType === "insertReplacementText") {
+    const text = ie.data ?? "";
+    const key = CHAR_KEY[text.toLowerCase()];
+    if (sticky.size && text.length === 1 && key !== undefined) tapKey(key);
+    else if (text) s.sendInput({ t: "Text", text });
+  } else if (ie.inputType === "deleteContentBackward") tapKey(EVDEV.Backspace);
+  else if (ie.inputType === "deleteContentForward") tapKey(EVDEV.Delete);
+  else if (ie.inputType === "insertLineBreak" || ie.inputType === "insertParagraph") tapKey(EVDEV.Enter);
+});
+function toggleKeyboard(): void {
+  if (document.activeElement === kbd) {
+    kbd.blur();
+    keys.hidden = true;
+  } else {
+    keys.hidden = false;
+    kbd.focus();
+  }
+}
+kbd.addEventListener("blur", () => { keys.hidden = true; });
+$<HTMLButtonElement>("t-kbd").addEventListener("click", () => toggleKeyboard());
+$<HTMLButtonElement>("t-display").addEventListener("click", () => displayBtn.click());
+attachTouch(stage, view, {
+  move: (p) => session?.motion(0, 0, p),
+  button: (button, down) => session?.sendInput({ t: "Button", button, down }),
+  wheel: (dx, dy) => session?.sendInput({ t: "Wheel", dx, dy }),
+  toggleKeyboard,
+});
+
+showSettings();
 void wasm();
 const urlPin = new URLSearchParams(location.hash.slice(1)).get("pin");
 connect(urlPin).catch((err) => { stats.error = String(err); say(String(err.message ?? err)); });

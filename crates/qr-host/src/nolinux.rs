@@ -33,6 +33,9 @@ pub mod vdisplay {
         pub fn set_scale(&self, _output: &str, _scale_pct: u16) -> Result<()> {
             match self.never {}
         }
+        pub fn shutdown(&mut self) {
+            match self.never {}
+        }
         pub fn monitors(&self) -> Result<Vec<Monitor>> {
             match self.never {}
         }

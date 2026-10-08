@@ -262,6 +262,25 @@ fn wayland_socket(name: Option<&str>) -> Result<PathBuf> {
     })
 }
 
+/// SIGTERM (systemd, `kill`) or SIGINT (Ctrl+C).
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let (Ok(mut term), Ok(mut int)) = (signal(SignalKind::terminate()), signal(SignalKind::interrupt())) else {
+            return std::future::pending().await;
+        };
+        tokio::select! {
+            _ = term.recv() => {}
+            _ = int.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
 fn dirs_home() -> PathBuf {
     std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."))
 }
@@ -494,6 +513,19 @@ async fn main() -> Result<()> {
         wl_socket,
     });
     let active: Arc<tokio::sync::Mutex<Option<Active>>> = Arc::default();
+    // Stopped with SIGTERM or Ctrl+C: end what this host started (the
+    // virtual display and its desktop) before exiting.
+    {
+        let ctx = ctx.clone();
+        tokio::spawn(async move {
+            shutdown_signal().await;
+            tracing::info!("stopping");
+            if let Some(vd) = &ctx.vd {
+                vd.lock().expect("lock").shutdown();
+            }
+            std::process::exit(0);
+        });
+    }
     while let Some(incoming) = ep.accept().await {
         let (ctx, id, keystore, pin, limiter, active, name) =
             (ctx.clone(), id.clone(), keystore.clone(), pin.clone(), limiter.clone(), active.clone(), name.clone());

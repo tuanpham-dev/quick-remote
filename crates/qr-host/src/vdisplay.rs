@@ -361,6 +361,16 @@ context.modules = [
 
 impl Drop for VirtualDisplay {
     fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+impl VirtualDisplay {
+    /// Ends everything the display started (its desktop included, through
+    /// sway's process group) and removes its runtime directory. Runs on
+    /// drop, and from the host's signal handler: a host stopped with
+    /// SIGTERM leaves nothing behind.
+    pub fn shutdown(&mut self) {
         // Reverse order: portals, sway, then the session services.
         for (_, c) in self.children.iter_mut().rev() {
             // SAFETY: signalling the child's own process group.
@@ -371,6 +381,7 @@ impl Drop for VirtualDisplay {
             unsafe { libc::kill(-(c.id() as i32), libc::SIGKILL) };
             let _ = c.wait();
         }
+        self.children.clear();
         // QR_VD_KEEP=1 keeps the logs for debugging.
         if std::env::var_os("QR_VD_KEEP").is_none() {
             let _ = std::fs::remove_dir_all(&self.runtime);

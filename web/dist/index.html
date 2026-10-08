@@ -2,40 +2,140 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>QuickRemote</title>
 <style>
-  :root { color-scheme: dark; --bg: #0b0d10; --fg: #e6e9ee; --muted: #9aa4b2; --panel: rgba(16, 20, 26, 0.86); --accent: #6aa8ff; }
+  :root { color-scheme: dark; --bg: #0b0d10; --fg: #e6e9ee; --muted: #9aa4b2; --panel: rgba(16, 20, 26, 0.9); --line: #39414d;
+    --accent: #6aa8ff; --warn: #f0b75a; }
+  /* Hidden means hidden, whatever display a rule below sets. */
+  [hidden] { display: none !important; }
   html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; overflow: hidden; }
-  #v { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; outline: none; }
+  #stage { position: absolute; inset: 0 0 44px 0; overflow: hidden; touch-action: none; }
+  #v { position: absolute; left: 0; top: 0; transform-origin: 0 0; outline: none; image-rendering: auto; }
+  #v.pixelated { image-rendering: pixelated; }
   #overlay { position: absolute; top: 12px; left: 12px; padding: 8px 10px; background: var(--panel); border-radius: 6px;
     font: 12px/1.45 ui-monospace, "DejaVu Sans Mono", monospace; white-space: pre; pointer-events: none; }
   #overlay.hidden { display: none; }
-  #bar { position: absolute; left: 0; right: 0; bottom: 0; display: flex; gap: 12px; align-items: center;
+  #banner { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); padding: 6px 14px; border-radius: 6px;
+    background: var(--panel); color: var(--warn); }
+  #bar { position: absolute; left: 0; right: 0; bottom: 0; display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center;
     padding: 6px 12px calc(6px + env(safe-area-inset-bottom, 0px)); background: var(--panel); }
-  #status { flex: 1; color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  button, label.btn { background: none; border: 1px solid #39414d; color: var(--fg); border-radius: 5px; padding: 4px 10px; cursor: pointer; font: inherit; }
-  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #status { flex: 1 1 12em; color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .group { display: flex; gap: 4px; align-items: center; }
+  #zoom-pct { min-width: 4ch; text-align: center; font-variant-numeric: tabular-nums; color: var(--muted); }
+  button, label.btn, select, input[type=number] { background: none; border: 1px solid var(--line); color: var(--fg); border-radius: 5px;
+    padding: 4px 10px; cursor: pointer; font: inherit; }
+  select, input[type=number] { background: #11151b; padding: 3px 6px; }
+  input[type=number] { width: 6ch; cursor: text; }
+  button[aria-pressed=true] { border-color: var(--accent); color: var(--accent); }
+  button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .hint { color: var(--muted); }
   #pin { position: absolute; inset: 0; display: grid; place-content: center; gap: 10px; background: var(--bg); text-align: center; }
   #pin[hidden] { display: none; }
   #pin input { font: 28px/1.2 ui-monospace, monospace; letter-spacing: 0.3em; width: 8ch; text-align: center; padding: 6px;
-    background: #11151b; color: var(--fg); border: 1px solid #39414d; border-radius: 6px; }
+    background: #11151b; color: var(--fg); border: 1px solid var(--line); border-radius: 6px; }
+  #display { position: absolute; right: 12px; bottom: calc(56px + env(safe-area-inset-bottom, 0px)); width: min(360px, calc(100vw - 24px));
+    display: grid; gap: 12px; padding: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+  #display fieldset { border: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+  #display legend { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; padding: 0; margin-bottom: 4px; }
+  #display .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  #display label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+  #display-note { color: var(--warn); }
+  #display-note:empty { display: none; }
+  #touchbar { position: absolute; top: calc(10px + env(safe-area-inset-top, 0px)); right: 10px; display: flex; gap: 6px; }
+  #touchbar button { background: var(--panel); }
+  #keys { position: absolute; left: 0; right: 0; bottom: calc(44px + env(safe-area-inset-bottom, 0px)); display: flex; flex-wrap: wrap; gap: 6px;
+    padding: 6px 8px; background: var(--panel); }
+  #keys button { min-width: 3em; padding: 6px 8px; }
+  #kbd { position: absolute; left: -1000px; top: 0; width: 10px; height: 10px; opacity: 0; }
 </style>
 </head>
 <body>
-<canvas id="v" tabindex="0"></canvas>
+<div id="stage"><canvas id="v" tabindex="0"></canvas></div>
 <div id="overlay" class="hidden"></div>
+<div id="banner" hidden></div>
 <form id="pin" hidden>
   <h2>Pair with this host</h2>
   <p>Enter the 6-digit PIN shown on the host.</p>
   <input id="pin-input" inputmode="numeric" autocomplete="one-time-code" maxlength="6" aria-label="PIN">
   <div><button type="submit">Pair</button></div>
 </form>
+
+<form id="display" hidden aria-label="Display settings">
+  <fieldset id="res-set">
+    <legend>Resolution</legend>
+    <label><input type="radio" name="mode" value="follow"> Follow window</label>
+    <div class="row">
+      <label><input type="radio" name="mode" value="fixed"> Fixed</label>
+      <select id="preset" aria-label="Preset resolution"></select>
+      <select id="hz" aria-label="Refresh rate"></select>
+    </div>
+    <div class="row">
+      <span class="hint">Custom</span>
+      <input id="cw" type="number" min="640" max="7680" step="2" aria-label="Custom width"> ×
+      <input id="ch" type="number" min="360" max="4320" step="2" aria-label="Custom height">
+      <button id="custom-apply" type="button">Use</button>
+    </div>
+  </fieldset>
+  <fieldset>
+    <legend>Pixel ratio</legend>
+    <div class="row" id="ratios">
+      <button type="button" data-ratio="auto" id="ratio-auto">Auto</button>
+      <button type="button" data-ratio="1">1×</button>
+      <button type="button" data-ratio="1.5">1.5×</button>
+      <button type="button" data-ratio="2">2×</button>
+    </div>
+  </fieldset>
+  <fieldset id="target-set">
+    <legend>Monitor</legend>
+    <label><input type="radio" name="target" value="virtual"> Virtual monitor of its own</label>
+    <label><input type="radio" name="target" value="real"> The desktop's real monitor</label>
+  </fieldset>
+  <fieldset>
+    <legend>View</legend>
+    <div class="row">
+      <label><input type="radio" name="view" value="fit"> Fit</label>
+      <label><input type="radio" name="view" value="fill"> Fill window</label>
+      <label><input type="radio" name="view" value="native"> 100%</label>
+    </div>
+  </fieldset>
+  <div id="display-note" role="status"></div>
+</form>
+
+<div id="touchbar" hidden>
+  <button id="t-kbd" type="button" aria-label="Keyboard">⌨</button>
+  <button id="t-zoom" type="button" aria-label="Reset zoom">100%</button>
+  <button id="t-display" type="button">Display</button>
+</div>
+<div id="keys" hidden>
+  <button type="button" data-key="1">Esc</button>
+  <button type="button" data-key="15">Tab</button>
+  <button type="button" data-mod="29" aria-pressed="false">Ctrl</button>
+  <button type="button" data-mod="56" aria-pressed="false">Alt</button>
+  <button type="button" data-mod="125" aria-pressed="false">Super</button>
+  <button type="button" data-key="105">←</button>
+  <button type="button" data-key="103">↑</button>
+  <button type="button" data-key="108">↓</button>
+  <button type="button" data-key="106">→</button>
+  <button type="button" data-key="102">Home</button>
+  <button type="button" data-key="107">End</button>
+  <button type="button" data-key="104">PgUp</button>
+  <button type="button" data-key="109">PgDn</button>
+</div>
+<textarea id="kbd" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="Keyboard input"></textarea>
+
 <div id="bar">
   <div id="status">Loading…</div>
+  <div class="group" aria-label="Zoom">
+    <button id="zoom-out" type="button" aria-label="Zoom out">−</button>
+    <span id="zoom-pct">100%</span>
+    <button id="zoom-in" type="button" aria-label="Zoom in">+</button>
+  </div>
+  <button id="display-btn" type="button" aria-expanded="false" aria-controls="display">Display</button>
   <button id="start" type="button">Start audio</button>
   <label class="btn">Send file<input id="file" type="file" multiple hidden></label>
-  <span style="color: var(--muted)">Ctrl+Alt+Shift: M lock mouse · S stats · F fullscreen · Q quit</span>
+  <button id="fs" type="button">Fullscreen</button>
+  <span class="hint">Ctrl+Alt+Shift: M lock mouse · S stats · F fullscreen · Q quit · Ctrl+wheel zoom</span>
 </div>
 <script type="module" src="main.js"></script>
 </body>

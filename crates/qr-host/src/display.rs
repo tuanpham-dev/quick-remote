@@ -115,8 +115,14 @@ pub fn kind(ctx: &HostCtx) -> u8 {
 /// Stream `stream`'s screen as it is now.
 pub fn info(ctx: &HostCtx, video: &Video, stream: u8, note: String) -> Msg {
     let (width, height) = video.current(stream).map(|(_, (w, h, _))| (w as u16, h as u16)).unwrap_or((0, 0));
-    Msg::DisplayInfo { stream, kind: kind(ctx), width, height, scale_pct: video.scale_pct(stream), note }
+    let kind = kind(ctx);
+    // A desktop that keeps its size says so from the start (the client
+    // sends it no requests).
+    let note = if note.is_empty() && kind == display_kind::FIXED { FIXED_NOTE.into() } else { note };
+    Msg::DisplayInfo { stream, kind, width, height, scale_pct: video.scale_pct(stream), note }
 }
+
+const FIXED_NOTE: &str = "This desktop keeps its own size; the picture is fitted to your window.";
 
 /// An even size within what encoders take.
 fn even(w: u16, h: u16) -> (u32, u32) {
@@ -179,7 +185,7 @@ pub async fn apply(ctx: &Arc<HostCtx>, video: &Arc<Video>, client: &str, stream:
             };
             info(ctx, video, stream, note.err().map(|e| format!("{e:#}")).unwrap_or_default())
         }
-        _ => info(ctx, video, stream, "This desktop keeps its own size; the picture is fitted to your window.".into()),
+        _ => info(ctx, video, stream, FIXED_NOTE.into()),
     }
 }
 

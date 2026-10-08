@@ -1,6 +1,6 @@
 // Minimal Chrome DevTools Protocol driver (Node ≥ 22: global WebSocket).
 import { spawn } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -64,7 +64,13 @@ export async function launch({ chrome = process.env.CHROME || "/usr/bin/google-c
     async key(code, key, down) {
       await send("Input.dispatchKeyEvent", { type: down ? "rawKeyDown" : "keyUp", code, key, windowsVirtualKeyCode: key.toUpperCase().charCodeAt(0) });
     },
-    async close() { try { ws.close(); } catch {} proc.kill("SIGKILL"); },
+    async close() {
+      try { ws.close(); } catch {}
+      proc.kill("SIGKILL");
+      await new Promise((r) => { proc.once("exit", r); setTimeout(r, 2000); });
+      // The throwaway profile (tens of MB each, in /tmp).
+      try { rmSync(dir, { recursive: true, force: true }); } catch {}
+    },
   };
   await send("Runtime.enable");
   await send("Page.enable");
