@@ -58,6 +58,13 @@ class Session {
   constructor(wt: WebTransport) {
     this.wt = wt;
     this.dgw = wt.datagrams.writable.getWriter();
+    // A video frame arrives as a burst of datagrams (hundreds for a busy
+    // 1080p picture) while this thread may be decoding or drawing; Chrome's
+    // default queue holds only a few and drops the rest, which reads as
+    // network loss and drives the host's bitrate and frame rate down.
+    const dg = wt.datagrams as WebTransportDatagramDuplexStream & { incomingHighWaterMark?: number; incomingMaxAge?: number | null };
+    dg.incomingHighWaterMark = 16384;
+    dg.incomingMaxAge = null;
   }
 
   async start(): Promise<void> {
