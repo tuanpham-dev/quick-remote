@@ -30,6 +30,7 @@ phase1)
 	run lan kde_fps
 	run lan kde_clip
 	run lan kde_resize
+	run lan kde_display
 	run wifi wifi
 	run lan web_rotate
 	[[ -f "$here/a10_a11.sh" ]] && run wan a10_a11
@@ -39,6 +40,7 @@ phase1)
 	run lan vd_audio
 	run lan vd_3d
 	run lan vd_clip
+	run lan vd_display
 	run lan gnome_clip
 	;;
 phase2)

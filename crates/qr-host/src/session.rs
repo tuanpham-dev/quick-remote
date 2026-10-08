@@ -43,7 +43,9 @@ pub fn path_class(conn: &quinn::Connection, web: &crate::web::WebPeers) -> Profi
 }
 
 pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) -> Result<()> {
-    let HostSession { control_tx, mut control_rx, hello, client_name, .. } = hs;
+    let HostSession { control_tx, mut control_rx, hello, client_name, client_fp, .. } = hs;
+    // Who this is, for what outlives the session (a virtual monitor).
+    let client_key = qr_net::identity::hex(&client_fp);
     let control_tx = Arc::new(AsyncMutex::new(control_tx));
     let Msg::Hello { minor: client_minor, want_width, want_height, want_refresh, decoders, .. } = hello else {
         unreachable!()
@@ -231,7 +233,10 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
         })
     };
     let result =
-        control_loop(&ctx, &conn, &mut control_rx, &control_tx, &video, &files, &ctl, clipboard.as_ref(), &heard).await;
+        control_loop(&ctx, &client_key, &conn, &mut control_rx, &control_tx, &video, &files, &ctl, clipboard.as_ref(), &heard)
+            .await;
+    // A virtual monitor of this client's stays for a reconnect, then goes.
+    ctx.displays.release(&ctx, &client_key);
     watchdog.abort();
     ctl_writer.abort();
     rumble_task.abort();
@@ -246,7 +251,8 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
 
 #[allow(clippy::too_many_arguments)]
 async fn control_loop(
-    ctx: &HostCtx,
+    ctx: &Arc<HostCtx>,
+    client: &str,
     conn: &quinn::Connection,
     rx: &mut qr_net::session::FramedRecv,
     tx: &AsyncMutex<FramedSend>,
@@ -319,7 +325,7 @@ async fn control_loop(
             Msg::DisplayRequest { stream, width, height, refresh, scale_pct, target } => {
                 let r = crate::display::Request { width, height, refresh, scale_pct, target };
                 tracing::info!(stream, ?r, "display request");
-                let info = crate::display::apply(ctx, video, stream, r).await;
+                let info = crate::display::apply(ctx, video, client, stream, r).await;
                 ctl(info);
             }
             Msg::Pause { paused } => {

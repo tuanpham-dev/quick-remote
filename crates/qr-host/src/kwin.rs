@@ -201,7 +201,19 @@ pub struct KwinSession {
     next: AtomicUsize,
     /// Each monitor's current stream.
     open: Mutex<HashMap<u8, ZkdeScreencastStreamUnstableV1>>,
+    /// Virtual outputs we created, by name: they exist while their stream
+    /// does.
+    virtuals: Mutex<HashMap<String, Virtual>>,
     fake: Option<OrgKdeKwinFakeInput>,
+}
+
+/// A virtual output of ours: its stream (closing it removes the output),
+/// the key of its node, and what it was created with.
+struct Virtual {
+    stream: ZkdeScreencastStreamUnstableV1,
+    key: usize,
+    size: (u32, u32),
+    scale_pct: u16,
 }
 
 impl KwinSession {
@@ -242,6 +254,7 @@ impl KwinSession {
             nodes,
             next: AtomicUsize::new(0),
             open: Mutex::default(),
+            virtuals: Mutex::default(),
             fake,
         };
         tracing::info!(monitors = ?me.monitors().iter().map(|m| &m.name).collect::<Vec<_>>(), "KWin session");
@@ -271,23 +284,89 @@ impl KwinSession {
         self.nodes.lock().unwrap().insert(i, None);
         let s = self.screencast.stream_output(out, POINTER_EMBEDDED, &self.qh, i);
         self.conn.flush()?;
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let node = loop {
-            match self.nodes.lock().unwrap().get(&i) {
-                Some(Some(Ok(node))) => break *node,
-                Some(Some(Err(e))) => bail!("KWin's screencast of {} failed: {e}", monitor.name),
-                None => bail!("KWin closed the screencast of {}", monitor.name),
-                Some(None) => {}
-            }
-            if Instant::now() > deadline {
-                bail!("KWin started no PipeWire stream for {}", monitor.name);
-            }
-            std::thread::sleep(Duration::from_millis(5));
-        };
+        let node = self.wait_node(i, &monitor.name)?;
         self.open.lock().unwrap().insert(monitor.id, s);
         tracing::debug!(output = monitor.name, node, "KWin screencast");
         Ok(node)
     }
+
+    /// The node of stream `i` once KWin has created it.
+    fn wait_node(&self, i: usize, what: &str) -> Result<u32> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match self.nodes.lock().unwrap().get(&i) {
+                Some(Some(Ok(node))) => return Ok(*node),
+                Some(Some(Err(e))) => bail!("KWin's screencast of {what} failed: {e}"),
+                None => bail!("KWin closed the screencast of {what}"),
+                Some(None) => {}
+            }
+            if Instant::now() > deadline {
+                bail!("KWin started no PipeWire stream for {what}");
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// Creates (or recreates) the virtual output `name`, `size` in pixels at
+    /// `scale_pct`, streamed to PipeWire: its node. Blocks until KWin
+    /// answers.
+    pub fn create_virtual(&self, name: &str, size: (u32, u32), scale_pct: u16) -> Result<u32> {
+        self.remove_virtual(name);
+        let s = scale_pct.clamp(50, 400) as f64 / 100.0;
+        // KWin takes the logical size; the output has size × scale pixels.
+        let (lw, lh) = ((size.0 as f64 / s).round() as i32, (size.1 as f64 / s).round() as i32);
+        let i = self.next.fetch_add(1, Ordering::Relaxed);
+        self.nodes.lock().unwrap().insert(i, None);
+        let stream = self.screencast.stream_virtual_output(name.into(), lw, lh, s, POINTER_EMBEDDED, &self.qh, i);
+        self.conn.flush()?;
+        let node = self.wait_node(i, name)?;
+        self.virtuals.lock().unwrap().insert(name.into(), Virtual { stream, key: i, size, scale_pct });
+        tracing::info!(name, width = size.0, height = size.1, scale_pct, node, "KWin virtual output");
+        Ok(node)
+    }
+
+    /// The node streaming virtual output `name`, recreating the output with
+    /// its last size if KWin closed the stream (e.g. after a capture error).
+    pub fn virtual_node(&self, name: &str) -> Option<Result<u32>> {
+        let (key, size, scale_pct) = {
+            let v = self.virtuals.lock().unwrap();
+            let v = v.get(name)?;
+            (v.key, v.size, v.scale_pct)
+        };
+        if let Some(Some(Ok(node))) = self.nodes.lock().unwrap().get(&key) {
+            return Some(Ok(*node));
+        }
+        Some(self.create_virtual(name, size, scale_pct))
+    }
+
+    /// Removes virtual output `name` (if it exists).
+    pub fn remove_virtual(&self, name: &str) {
+        if let Some(v) = self.virtuals.lock().unwrap().remove(name) {
+            v.stream.close();
+            let _ = self.conn.flush();
+            tracing::info!(name, "KWin virtual output removed");
+        }
+    }
+
+    /// The virtual outputs' names.
+    pub fn virtual_names(&self) -> Vec<String> {
+        self.virtuals.lock().unwrap().keys().cloned().collect()
+    }
+
+    /// Whether KWin can add virtual outputs here. Its headless backend
+    /// (`--virtual`, outputs named `Virtual-N`) can't: it answers a
+    /// virtual-output stream with "Could not find output", and may crash
+    /// when that failed stream is closed later, so it isn't asked at all.
+    pub fn can_create_virtual(&self) -> bool {
+        let mons = self.monitors();
+        !mons.is_empty() && !mons.iter().all(|m| m.name.starts_with("Virtual-") || self.is_ours(&m.name))
+    }
+
+    /// Whether `name` is a virtual output of ours.
+    pub fn is_ours(&self, name: &str) -> bool {
+        self.virtuals.lock().unwrap().contains_key(name)
+    }
+
 
     pub fn injector(&self) -> Result<KwinInput> {
         let fake = self.fake.clone().context("KWin offers no fake input to this program")?;
@@ -430,6 +509,58 @@ impl Injector for KwinInput {
     fn name(&self) -> &'static str {
         "kwin"
     }
+}
+
+
+/// Runs `kscreen-doctor` (Plasma's display tool) with `args`: its output.
+pub fn kscreen(args: &[&str]) -> Result<String> {
+    // Its own defaults: with Qt's offscreen platform (or a forced backend)
+    // it reads a fake screen or doesn't apply changes.
+    let out = std::process::Command::new("kscreen-doctor")
+        .args(args)
+        .env_remove("QT_QPA_PLATFORM")
+        .env_remove("KSCREEN_BACKEND")
+        .output()
+        .context("running kscreen-doctor (part of Plasma)")?;
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    if !out.status.success() {
+        bail!("kscreen-doctor {args:?}: {}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    Ok(text)
+}
+
+/// Output `name` as kscreen-doctor describes it.
+fn kscreen_output(name: &str) -> Result<serde_json::Value> {
+    let v: serde_json::Value = serde_json::from_str(&kscreen(&["-j"])?)?;
+    v["outputs"]
+        .as_array()
+        .and_then(|a| a.iter().find(|o| o["name"] == name))
+        .cloned()
+        .with_context(|| format!("kscreen-doctor doesn't list {name}"))
+}
+
+/// Output `name`'s scale, percent.
+pub fn kscreen_scale_pct(name: &str) -> Result<u16> {
+    Ok((kscreen_output(name)?["scale"].as_f64().context("no scale")? * 100.0).round() as u16)
+}
+
+/// The modes output `name` offers, as (width, height, refresh Hz).
+pub fn kscreen_modes(name: &str) -> Result<Vec<(u32, u32, u32)>> {
+    let out = kscreen_output(name)?;
+    Ok(out["modes"]
+        .as_array()
+        .map(|m| {
+            m.iter()
+                .filter_map(|m| {
+                    Some((
+                        m["size"]["width"].as_u64()? as u32,
+                        m["size"]["height"].as_u64()? as u32,
+                        m["refreshRate"].as_f64()?.round() as u32,
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default())
 }
 
 #[cfg(test)]

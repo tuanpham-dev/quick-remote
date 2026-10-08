@@ -182,9 +182,16 @@ impl Video {
             // KDE: a fresh screencast at the monitor's current size (a
             // running PipeWire stream can't change size under pipewiresrc).
             drop(self.streams.lock().expect("lock").remove(&id));
-            (w, h) = (mon.width as u32, mon.height as u32);
+            // The layout is in logical units; the stream has the pixels.
+            let k = self.scale_pct(id) as f64 / 100.0;
+            (w, h) = (((mon.width as f64 * k).round() as u32) & !1, ((mon.height as f64 * k).round() as u32) & !1);
             let (ctx, m) = (self.ctx.clone(), mon.clone());
-            let node = tokio::task::spawn_blocking(move || ctx.kwin.as_ref().expect("kwin").stream(&m)).await??;
+            let node = tokio::task::spawn_blocking(move || {
+                let kwin = ctx.kwin.as_ref().expect("kwin");
+                // A virtual output of ours streams through its own stream.
+                kwin.virtual_node(&m.name).unwrap_or_else(|| kwin.stream(&m))
+            })
+            .await??;
             Source::PipeWire { fd: None, node }
         } else {
             (w, h) = (mon.width as u32, mon.height as u32);

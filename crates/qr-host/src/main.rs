@@ -182,6 +182,9 @@ pub struct HostCtx {
     pub mutter: Option<mutter::MutterSession>,
     /// The KDE desktop's screencast and fake input, for `--source kwin`.
     pub kwin: Option<kwin::KwinSession>,
+    /// Clients' virtual monitors (KDE, GNOME), kept a minute past their
+    /// session.
+    pub displays: display::Registry,
     /// A wlroots desktop's Wayland socket (screencopy and virtual input),
     /// for `--source wayland`.
     pub wl_socket: Option<PathBuf>,
@@ -487,6 +490,7 @@ async fn main() -> Result<()> {
         vd,
         mutter,
         kwin,
+        displays: Default::default(),
         wl_socket,
     });
     let active: Arc<tokio::sync::Mutex<Option<Active>>> = Arc::default();

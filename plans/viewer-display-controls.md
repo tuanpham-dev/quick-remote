@@ -73,7 +73,7 @@ Clients choose the remote desktop's size (follow window / fixed), sharpness (pix
   - Do: `DisplayManager::apply(request) -> DisplayInfo`; session handles `DisplayRequest` and maps `Resize` onto it (current scale/target); sends `DisplayInfo` at session start and after each apply; sway: existing `set_mode` plus new `VirtualDisplay::set_scale(output, scale)` (`swaymsg output <name> scale <s>`); X11/Windows: kind 0, no change, note "This desktop keeps its own size".
   - Depends on: T4
   - Done when: `tests/e2e/vd_display.sh` (new, headless client with a script command `display W H HZ SCALE TARGET`) sees StreamStarted at the requested size and `swaymsg -t get_outputs` scale 2 after a 2× request.
-- [ ] **T6 — KDE virtual and real monitor**
+- [x] **T6 — KDE virtual and real monitor**
   - Files: `crates/qr-host/src/kwin.rs`, `crates/qr-host/src/display.rs`
   - Do: `KwinSession::stream_virtual(name, w, h, scale) -> node` via `stream_virtual_output` (bind screencast v4 → v2+ request exists); one virtual monitor per client key, replaced on change, closed 60 s after the session ends (timer in `DisplayManager`, cancelled on reconnect with the same key); after creation, if `kscreen-doctor -j` lists no non-virtual output enabled, set `output.<name>.priority.1`; real target: `kscreen-doctor output.<name>.mode.<W>x<H>@<Hz>` when listed, `output.<name>.scale.<s>`, else note.
   - Depends on: T5
@@ -155,4 +155,5 @@ Clients choose the remote desktop's size (follow window / fixed), sharpness (pix
 - Tests run headless in the netns harness; the live test host is not restarted until Phase 6.
 
 ## Open Questions / Risks
+- **Found in T6:** KWin's headless backend (`--virtual`) can't add virtual outputs (only the DRM backend implements `createVirtualOutput`), so KDE virtual monitors (A3, A4) can't be verified on this machine; the host detects a headless KWin, uses the real monitor and says so in `DisplayInfo` (tested as A3-fallback). `kscreen-doctor` must run with its own defaults (Qt's offscreen platform reads a fake screen).
 - KWin `stream_virtual_output` scale and refresh handling, and mutter `RecordVirtual` + `ApplyMonitorsConfig` on a virtual monitor, are unverified: T6/T7 start by probing them on the headless desktops; any missing capability becomes a `DisplayInfo` note and a spec update.
