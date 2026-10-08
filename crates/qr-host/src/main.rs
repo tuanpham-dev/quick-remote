@@ -53,7 +53,7 @@ use qr_net::keystore::KeyStore;
 use qr_net::pairing::{PinLimiter, new_pin};
 use qr_net::session::{HostConfig, host_handshake};
 use qr_net::{Identity, endpoint, identity};
-use qr_proto::msg::{ErrorCode, Profile};
+use qr_proto::msg::ErrorCode;
 use qr_proto::{ALPN, Msg};
 
 #[derive(Parser, Debug)]
@@ -81,7 +81,7 @@ pub struct Args {
     /// Frame rate cap.
     #[arg(long, default_value_t = 60)]
     fps: u32,
-    /// Fixed starting bitrate in kbit/s (0: from the profile).
+    /// Fixed starting bitrate in kbit/s (0: the default for the size).
     #[arg(long, default_value_t = 0)]
     bitrate: u32,
     /// Upper bitrate limit in kbit/s.
@@ -93,9 +93,10 @@ pub struct Args {
     /// Codec (`auto`, `h264`, `h265`, `av1`).
     #[arg(long, default_value = "auto")]
     codec: String,
-    /// Rate-control profile (`auto`, `lan`, `internet`).
-    #[arg(long, default_value = "auto")]
-    profile: String,
+    /// No longer used (one rate controller serves every path); accepted so
+    /// existing scripts keep working.
+    #[arg(long, hide = true)]
+    profile: Option<String>,
     /// Serve the web client here (TCP for the page, UDP for WebTransport).
     #[arg(long)]
     web_listen: Option<SocketAddr>,
@@ -154,14 +155,6 @@ pub struct Args {
 }
 
 impl Args {
-    fn profile(&self) -> Option<Profile> {
-        match self.profile.as_str() {
-            "lan" => Some(Profile::Lan),
-            "internet" => Some(Profile::Internet),
-            _ => None,
-        }
-    }
-
     fn size(&self) -> (u32, u32) {
         self.size.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?))).unwrap_or((1920, 1080))
     }
@@ -279,6 +272,9 @@ async fn main() -> Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
     let mut args = Args::parse();
+    if args.profile.is_some() {
+        tracing::warn!("the --profile option has no effect: one rate controller serves every connection");
+    }
     // Service modes pass everything else on to the host they run, except
     // --source (they choose it).
     let forward = || {

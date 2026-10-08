@@ -11,7 +11,6 @@ use anyhow::{Context, Result, bail};
 use qr_media::encode::{EncodeConfig, Source};
 use qr_media::probe::EncoderInfo;
 use qr_proto::Msg;
-use qr_proto::msg::Profile;
 
 use crate::HostCtx;
 use crate::ratectl::{Limits, RateCtl};
@@ -36,7 +35,6 @@ pub struct Video {
     encoder444: Option<EncoderInfo>,
     /// Streams run in 4:4:4 (sharp text with `encoder444`).
     chroma444: AtomicBool,
-    pub profile: Profile,
     max_datagram: Option<usize>,
     ctl: qr_net::files::Control,
     streams: Mutex<BTreeMap<u8, Current>>,
@@ -57,7 +55,6 @@ impl Video {
         conn: quinn::Connection,
         encoder: EncoderInfo,
         encoder444: Option<EncoderInfo>,
-        profile: Profile,
         max_datagram: Option<usize>,
         ctl: qr_net::files::Control,
     ) -> Self {
@@ -67,7 +64,6 @@ impl Video {
             encoder,
             encoder444,
             chroma444: AtomicBool::new(false),
-            profile,
             max_datagram,
             ctl,
             streams: Default::default(),
@@ -163,7 +159,7 @@ impl Video {
             self.ctx.source_for(&mon)
         };
         let limits = Limits { width: w, height: h, max_fps: fps, min_kbps: 300, max_kbps: self.ctx.args.max_kbps };
-        let mut rate = RateCtl::new(self.profile, limits, Instant::now());
+        let mut rate = RateCtl::new(limits, Instant::now());
         if self.ctx.args.bitrate > 0 {
             rate.target_kbps = self.ctx.args.bitrate;
         }

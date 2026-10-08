@@ -30,6 +30,7 @@ phase1)
 	run lan kde_fps
 	run lan kde_clip
 	run lan kde_resize
+	run wifi wifi
 	run lan web_rotate
 	[[ -f "$here/a10_a11.sh" ]] && run wan a10_a11
 	# Virtual display (ENV-BLOCKED without the render group).

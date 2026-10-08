@@ -1,0 +1,373 @@
+<title>QuickRemote Display Controls</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one reading column (~72ch) with wide tables and the diagram in their own scrollers; a review document, quiet chrome. */
+:root {
+  --bg: #f6f7f8;
+  --surface: #ffffff;
+  --fg: #1d2329;
+  --muted: #5b6670;
+  --line: #d9dee3;
+  --accent: #0b6e7f;
+  --accent-soft: #e2f1f3;
+  --new: #b4530a;
+  --new-soft: #fbeee2;
+  --font-body: "Public Sans", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12171b; --surface: #1a2026; --fg: #e3e8ec; --muted: #9aa6b0; --line: #2e3740;
+    --accent: #4fc1d1; --accent-soft: #163238; --new: #f0a25a; --new-soft: #3a2817; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12171b; --surface: #1a2026; --fg: #e3e8ec; --muted: #9aa6b0; --line: #2e3740;
+  --accent: #4fc1d1; --accent-soft: #163238; --new: #f0a25a; --new-soft: #3a2817; color-scheme: dark;
+}
+body { background: var(--bg); color: var(--fg); font: 15px/1.6 var(--font-body); padding: 0 16px; }
+main { max-width: 74ch; margin: 0 auto; padding-block: 40px 80px; display: grid; gap: 36px; }
+header { display: grid; gap: 8px; }
+.eyebrow { font: 600 12px/1 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+h1 { font-size: 30px; line-height: 1.2; margin: 0; text-wrap: balance; }
+h2 { font-size: 19px; margin: 0 0 10px; text-wrap: balance; }
+h3 { font-size: 15px; margin: 16px 0 6px; }
+p, ul, ol { margin: 0 0 10px; }
+.lede { color: var(--muted); font-size: 16px; }
+section { min-width: 0; }
+code, .mono { font-family: var(--font-mono); font-size: 13px; }
+.scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; vertical-align: top; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+th { font-weight: 600; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
+tr:last-child td { border-bottom: none; }
+td.id { font-family: var(--font-mono); font-weight: 600; color: var(--accent); white-space: nowrap; }
+.req { display: grid; grid-template-columns: 3.4em 1fr; gap: 4px 10px; }
+.req .id { font: 600 13px/1.6 var(--font-mono); color: var(--accent); }
+.req .txt { min-width: 0; }
+.grp { font: 600 12px/1 var(--font-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 18px 0 8px; }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+.cols > div { min-width: 0; }
+figure { margin: 0; }
+figcaption { color: var(--muted); font-size: 13px; margin-top: 8px; }
+.diagram svg { display: block; width: 100%; min-width: 760px; height: auto; color: var(--fg); }
+.tag { display: inline-block; font: 600 11px/1.5 var(--font-mono); padding: 0 6px; border-radius: 3px; }
+.tag.new { background: var(--new-soft); color: var(--new); }
+.tag.chg { background: var(--accent-soft); color: var(--accent); }
+.mock { font: 12.5px/1.45 var(--font-mono); white-space: pre; padding: 14px 16px; margin: 0; color: var(--fg); }
+</style>
+
+<main>
+<header>
+  <div class="eyebrow">Spec · plans/viewer-display-controls</div>
+  <h1>QuickRemote Display Controls</h1>
+  <p class="lede">Clients choose how big the remote desktop is (follow the window, or a fixed resolution), how sharp it is (pixel ratio and desktop scale), and how it is shown (fit, fill, 100%, zoom and pan). The host makes the desktop that size: its own virtual display, a virtual monitor on KDE or GNOME, or the real monitor's mode. The round also brings touch gestures, reconnecting, pausing while hidden and fullscreen keyboard lock from the Perch and QuicDesk viewers, and replaces the two rate-control profiles with one adaptive controller so Wi-Fi stops collapsing to 5 fps.</p>
+</header>
+
+<section>
+  <h2>Current state</h2>
+  <ul>
+    <li><strong>Size:</strong> the host resizes only its own sway virtual display, on a <code>Resize</code> request; the web client never sends one. KDE, GNOME and X11 desktops always stream at the monitor's own size.</li>
+    <li><strong>Showing the picture:</strong> the web client scales the picture to the page; there is no zoom, pan, fit choice, pixel ratio or desktop scale.</li>
+    <li><strong>Session:</strong> after a host restart or network drop the web page stays on "Connection lost"; nothing pauses the stream while the tab is hidden.</li>
+    <li><strong>Touch:</strong> Android has a trackpad mode, two-finger scroll, two-finger tap as right click, and a three-finger tap that opens the keyboard. The web client has no touch handling.</li>
+    <li><strong>Rate control:</strong> two profiles, picked once per session by private address and a round trip under 30 ms. On jittery Wi-Fi the session lands on Internet, which cuts on every delay rise; the LAN profile cuts 15% per lossy 50 ms window and recovers 5% a second. Either way a loss burst drove fps to 5. Datagram pacing and a keyframe throttle are live on the test host but uncommitted.</li>
+    <li><strong>Reference viewers:</strong> Perch's Remote Desktop and QuicDesk follow the tab size, set a pixel ratio with a magnifier button (desktop UI scale follows it), fit the picture to the tab, reconnect with backoff, pause while hidden, offer a phone keyboard with an extra-keys strip, and lock the keyboard in fullscreen.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>Decisions</h2>
+  <div class="scroll"><table>
+    <thead><tr><th>Question</th><th>Decision</th><th>Reason</th></tr></thead>
+    <tbody>
+      <tr><td>Which clients</td><td>Web, native desktop and Android</td><td>Same features everywhere; the host side is shared.</td></tr>
+      <tr><td>Resolution modes</td><td>Follow window, or Fixed: presets 1280×720, 1600×900, 1920×1080, 2560×1440, 3840×2160, plus custom W×H; refresh 30, 60 or 120</td><td>Requested: fixed resolution as an extra option next to follow-window.</td></tr>
+      <tr><td>KDE/GNOME target</td><td>Both, chosen per client: <em>Virtual monitor</em> (default) or <em>Real monitor</em> (switch mode, else scale to fit)</td><td>The virtual monitor never disturbs a physical screen; real-monitor mode is there when wanted.</td></tr>
+      <tr><td>Zoom</td><td>Pixel ratio (Auto, 1×, 1.5×, 2×) and view zoom (Ctrl+wheel, pinch, buttons, pan)</td><td>Covers Perch's magnifier and magnifying part of the screen.</td></tr>
+      <tr><td>Fit scaling up</td><td>Fit shrinks only; a "Fill window" toggle allows scaling up</td><td>A small picture blown up reads as broken.</td></tr>
+      <tr><td>Desktop UI scale</td><td>Follows the pixel ratio automatically</td><td>At 2× apps keep their apparent size and get sharper.</td></tr>
+      <tr><td>Extras</td><td>Auto-reconnect, pause while hidden, touch with phone keyboard, fullscreen keyboard lock, long press = right click, three-finger tap = middle click</td><td>From the reference viewers, plus the two gestures asked for.</td></tr>
+      <tr><td>Android keyboard</td><td>Toolbar button and four-finger tap</td><td>Three-finger tap becomes middle click.</td></tr>
+      <tr><td>Virtual monitor after disconnect</td><td>Kept 60 s, then removed</td><td>A quick reconnect finds its windows where they were.</td></tr>
+      <tr><td>Resize timing</td><td>300 ms after the window stops changing</td><td>No thrashing while dragging; new size shows about 0.5–1 s after release.</td></tr>
+      <tr><td>Primary monitor</td><td>Client's virtual monitor becomes primary only when the desktop has no physical monitor</td><td>Headless desktops get the panel on the client's screen; a person at the machine keeps theirs.</td></tr>
+      <tr><td>Rate control</td><td>One adaptive controller for all paths, folded into this plan</td><td>Removes the profile guess that fails on Wi-Fi.</td></tr>
+      <tr><td>Old <code>--profile</code> option</td><td>Still accepted, ignored with a warning</td><td>Existing scripts and service units keep starting.</td></tr>
+      <tr><td>Settings storage</td><td>Per browser (web) or per device (native, Android)</td><td>A phone and a desktop want different sizes and ratios.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <h2>Scope</h2>
+  <div class="cols">
+    <div>
+      <h3>In</h3>
+      <ul>
+        <li>Resolution modes and pixel ratio in the web, native and Android clients</li>
+        <li>Host: sway virtual display, KDE (KWin) and GNOME (mutter) virtual monitors and real-monitor modes, desktop UI scale</li>
+        <li>Fit, Fill window, 100%, view zoom and pan in all three clients</li>
+        <li>Auto-reconnect and pause while hidden in all three clients</li>
+        <li>Touch gestures and phone keyboard on web and Android</li>
+        <li>Fullscreen keyboard lock in the web client</li>
+        <li>One adaptive rate controller, datagram pacing, keyframe throttle</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Out</h3>
+      <ul>
+        <li>Resizing X11 desktops and the Windows host: they keep their size and the client scales to fit</li>
+        <li>Several viewers on one desktop at once (a new viewer still replaces the previous one)</li>
+        <li>Remote cursor shapes as a client-side pointer (the cursor stays drawn into the video)</li>
+        <li>Removing the CPU copy in the KDE/GNOME capture path</li>
+        <li>Image clipboard and file transfer changes</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Architecture</h2>
+  <figure class="diagram">
+    <div class="scroll">
+    <svg viewBox="0 0 980 430" role="img" aria-label="Clients send a display request (size, refresh, pixel ratio, target) to the host; the host's display manager sizes the sway virtual display, a KWin or mutter virtual monitor, or the real monitor, and applies the desktop scale; capture feeds the encoder, the paced sender returns video, and client feedback drives the single adaptive rate controller.">
+      <defs>
+        <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+        </marker>
+      </defs>
+      <g font-family="Public Sans, Arial, sans-serif" font-size="12" fill="currentColor">
+        <!-- clients column -->
+        <text x="20" y="24" font-weight="700" font-size="12">CLIENTS</text>
+        <rect x="20" y="36" width="190" height="112" rx="5" fill="none" stroke="currentColor"/>
+        <text x="32" y="56" font-weight="700">Web · Native · Android</text>
+        <text x="32" y="76">Display settings</text>
+        <text x="32" y="93">view zoom / fit / pan</text>
+        <text x="32" y="110">touch + phone keyboard</text>
+        <text x="32" y="127">reconnect · pause hidden</text>
+        <rect x="150" y="42" width="54" height="16" rx="3" fill="#b4530a" fill-opacity=".18"/>
+        <text x="177" y="54" text-anchor="middle" font-size="10.5" font-weight="700" fill="#b4530a">changed</text>
+
+        <!-- host session -->
+        <text x="290" y="24" font-weight="700">HOST</text>
+        <rect x="290" y="36" width="180" height="58" rx="5" fill="none" stroke="currentColor"/>
+        <text x="302" y="58" font-weight="700">Session</text>
+        <text x="302" y="78">display request, feedback</text>
+
+        <rect x="290" y="120" width="180" height="76" rx="5" fill="#b4530a" fill-opacity=".10" stroke="#b4530a"/>
+        <text x="302" y="142" font-weight="700">Display manager</text>
+        <text x="302" y="160">target → size, scale,</text>
+        <text x="302" y="176">virtual monitor lifetime (60 s)</text>
+        <text x="463" y="134" text-anchor="end" font-size="10.5" font-weight="700" fill="#b4530a">new</text>
+
+        <!-- desktops -->
+        <text x="560" y="24" font-weight="700">DESKTOP</text>
+        <rect x="560" y="36" width="200" height="44" rx="5" fill="none" stroke="currentColor"/>
+        <text x="572" y="54" font-weight="700">Host's sway display</text>
+        <text x="572" y="71">output mode + scale</text>
+        <rect x="560" y="92" width="200" height="60" rx="5" fill="none" stroke="currentColor"/>
+        <text x="572" y="110" font-weight="700">KDE (KWin)</text>
+        <text x="572" y="127">virtual monitor of W×H, scale</text>
+        <text x="572" y="143">or real output mode + scale</text>
+        <rect x="560" y="164" width="200" height="60" rx="5" fill="none" stroke="currentColor"/>
+        <text x="572" y="182" font-weight="700">GNOME (mutter)</text>
+        <text x="572" y="199">virtual monitor of W×H, scale</text>
+        <text x="572" y="215">or real monitor mode + scale</text>
+
+        <!-- capture/encode -->
+        <rect x="560" y="262" width="200" height="44" rx="5" fill="none" stroke="currentColor"/>
+        <text x="572" y="280" font-weight="700">Capture → encoder</text>
+        <text x="572" y="297">restarts on a new size</text>
+
+        <rect x="290" y="262" width="180" height="44" rx="5" fill="#b4530a" fill-opacity=".10" stroke="#b4530a"/>
+        <text x="302" y="280" font-weight="700">Paced sender</text>
+        <text x="302" y="297">spreads each frame</text>
+        <text x="463" y="276" text-anchor="end" font-size="10.5" font-weight="700" fill="#b4530a">new</text>
+
+        <rect x="290" y="340" width="180" height="58" rx="5" fill="#b4530a" fill-opacity=".10" stroke="#b4530a"/>
+        <text x="302" y="360" font-weight="700">Adaptive rate control</text>
+        <text x="302" y="377">one controller; keyframes</text>
+        <text x="302" y="392">at most 1 per 250 ms</text>
+        <text x="463" y="354" text-anchor="end" font-size="10.5" font-weight="700" fill="#b4530a">new</text>
+
+        <!-- arrows -->
+        <line x1="210" y1="66" x2="286" y2="66" stroke="currentColor" marker-end="url(#ah)"/>
+        <text x="248" y="58" text-anchor="middle" font-size="11">size, Hz,</text>
+        <text x="248" y="84" text-anchor="middle" font-size="11">ratio, target</text>
+
+        <line x1="380" y1="94" x2="380" y2="116" stroke="currentColor" marker-end="url(#ah)"/>
+
+        <line x1="470" y1="140" x2="556" y2="60" stroke="currentColor" marker-end="url(#ah)"/>
+        <line x1="470" y1="155" x2="556" y2="122" stroke="currentColor" marker-end="url(#ah)"/>
+        <line x1="470" y1="170" x2="556" y2="194" stroke="currentColor" marker-end="url(#ah)"/>
+        <text x="510" y="112" text-anchor="middle" font-size="11">resize,</text>
+        <text x="510" y="126" text-anchor="middle" font-size="11">scale</text>
+
+        <line x1="860" y1="58" x2="860" y2="284" stroke="currentColor"/>
+        <line x1="760" y1="58" x2="860" y2="58" stroke="currentColor"/>
+        <line x1="760" y1="122" x2="860" y2="122" stroke="currentColor"/>
+        <line x1="760" y1="194" x2="860" y2="194" stroke="currentColor"/>
+        <line x1="860" y1="284" x2="764" y2="284" stroke="currentColor" marker-end="url(#ah)"/>
+        <text x="868" y="176" font-size="11">frames</text>
+        <text x="868" y="191" font-size="11">(PipeWire,</text>
+        <text x="868" y="206" font-size="11">screencopy)</text>
+
+        <line x1="560" y1="284" x2="474" y2="284" stroke="currentColor" marker-end="url(#ah)"/>
+        <text x="517" y="276" text-anchor="middle" font-size="11">encoded</text>
+
+        <polyline points="290,284 115,284 115,152" fill="none" stroke="currentColor" marker-end="url(#ah)"/>
+        <text x="200" y="276" text-anchor="middle" font-size="11">video datagrams (paced)</text>
+
+        <polyline points="80,148 80,369 286,369" fill="none" stroke="currentColor" stroke-dasharray="5 4" marker-end="url(#ah)"/>
+        <text x="180" y="361" text-anchor="middle" font-size="11">feedback: loss, delay</text>
+
+        <polyline points="470,369 660,369 660,310" fill="none" stroke="currentColor" stroke-dasharray="5 4" marker-end="url(#ah)"/>
+        <text x="566" y="361" text-anchor="middle" font-size="11">bitrate, fps, keyframe</text>
+      </g>
+    </svg>
+    </div>
+    <figcaption>A client's display request goes through a new display manager on the host, which sizes and scales the right kind of screen; capture restarts at the new size. Video leaves through a paced sender, and client feedback drives one adaptive rate controller. Orange marks new or changed pieces.</figcaption>
+  </figure>
+</section>
+
+<section>
+  <h2>Requirements</h2>
+
+  <div class="grp">Resolution and display target</div>
+  <div class="req">
+    <span class="id">R1</span><span class="txt">Every client offers a Resolution setting: <em>Follow window</em> (default) or <em>Fixed</em>, with presets 1280×720, 1600×900, 1920×1080, 2560×1440, 3840×2160, a custom W×H (even numbers from 640×360 to 7680×4320), and refresh 30, 60 or 120 Hz.</span>
+    <span class="id">R2</span><span class="txt">In Follow window, the requested size is the window's content area (on Android, the screen in the current orientation) multiplied by the pixel ratio, rounded down to even numbers, and sent once the window has been unchanged for 300 ms.</span>
+    <span class="id">R3</span><span class="txt">On KDE and GNOME desktops, every client offers a Display target setting: <em>Virtual monitor</em> (default) or <em>Real monitor</em>.</span>
+    <span class="id">R4</span><span class="txt">With Virtual monitor, the host creates a monitor of exactly the requested size, refresh and desktop scale, streams it, and replaces it when the request changes. Windows on it stay when it is resized.</span>
+    <span class="id">R5</span><span class="txt">A virtual monitor outlives its client by 60 seconds; a reconnect within that time streams the same monitor. After 60 seconds it is removed.</span>
+    <span class="id">R6</span><span class="txt">The client's virtual monitor becomes the primary monitor when the desktop has no physical monitor; otherwise it is added as a secondary monitor.</span>
+    <span class="id">R7</span><span class="txt">With Real monitor, the host switches the monitor to the requested size and refresh when the monitor lists that mode; otherwise the monitor keeps its mode, the client shows it scaled to fit, and the client tells the user that size isn't available.</span>
+    <span class="id">R8</span><span class="txt">On the host's own sway virtual display, both resolution modes resize the display directly (no target setting is shown).</span>
+    <span class="id">R9</span><span class="txt">On X11 and Windows hosts the resolution settings are disabled with a note that this desktop keeps its own size.</span>
+  </div>
+
+  <div class="grp">Pixel ratio and desktop scale</div>
+  <div class="req">
+    <span class="id">R10</span><span class="txt">Every client offers a Pixel ratio setting: Auto (the device's ratio, at most 2), 1×, 1.5× or 2×, with the detected device ratio shown next to Auto.</span>
+    <span class="id">R11</span><span class="txt">The host sets the desktop's UI scale to the pixel ratio (rounded to the nearest scale the desktop supports) on the sway virtual display, KDE monitors and GNOME monitors, so apps keep their apparent size.</span>
+  </div>
+
+  <div class="grp">Showing the picture</div>
+  <div class="req">
+    <span class="id">R12</span><span class="txt">Every client offers three view modes: <em>Fit</em> (default: shrink to fit, never enlarge), <em>Fill window</em> (fit, enlarging allowed) and <em>100%</em> (one remote pixel per device pixel, panned when larger than the window). Aspect ratio is always kept.</span>
+    <span class="id">R13</span><span class="txt">View zoom from 25% to 400%: Ctrl+wheel and +/− controls on desktop clients, pinch on touch screens; when the zoomed picture is larger than the window it pans (drag with the scroll gesture, scrollbars or edge-follow on desktop).</span>
+    <span class="id">R14</span><span class="txt">Pointer and touch positions reach the remote desktop at the point under the finger or cursor at every zoom level, view mode and pan position.</span>
+    <span class="id">R15</span><span class="txt">All display and view settings persist per browser (web) or per device (native, Android) and apply on the next connection.</span>
+  </div>
+
+  <div class="grp">Session</div>
+  <div class="req">
+    <span class="id">R16</span><span class="txt">When the connection drops, the client keeps the last picture, shows "Reconnecting…", and retries after 1, 2, 4, 8 and then every 10 seconds, without asking for the PIN when it is paired.</span>
+    <span class="id">R17</span><span class="txt">While the web tab is hidden, the native window is minimized, or the Android app is in the background, the host sends no video; on return the picture resumes with a fresh keyframe within one second.</span>
+  </div>
+
+  <div class="grp">Touch and keyboard</div>
+  <div class="req">
+    <span class="id">R18</span><span class="txt">Touch gestures on web and Android: tap = left click, long press (500 ms without moving) = right click, two-finger tap = right click, two-finger drag = scroll, three-finger tap = middle click, pinch = view zoom, four-finger tap = show or hide the keyboard.</span>
+    <span class="id">R19</span><span class="txt">On touch devices a toolbar holds Keyboard, Zoom and Display buttons. The keyboard comes with an extra-keys strip: Esc, Tab, arrows, Home, End, PgUp, PgDn, and sticky Ctrl, Alt and Super that apply to the next key.</span>
+    <span class="id">R20</span><span class="txt">In web fullscreen on Chromium browsers, browser shortcuts (Ctrl+T, Ctrl+W excepted, Alt+Tab where the OS allows) go to the remote desktop, and holding Escape for one second exits fullscreen.</span>
+  </div>
+
+  <div class="grp">Rate control</div>
+  <div class="req">
+    <span class="id">R21</span><span class="txt">One adaptive rate controller serves every connection, local or internet: it raises the bitrate while delivery is clean, backs off on loss that error correction cannot repair or on a steadily rising delay, and tolerates jitter without backing off.</span>
+    <span class="id">R22</span><span class="txt">Each frame's datagrams are paced instead of sent in one burst, and forced keyframes are at most one per 250 ms (or two round trips, whichever is longer).</span>
+    <span class="id">R23</span><span class="txt">The host still accepts <code>--profile</code>, ignores it, and prints a warning that it has no effect.</span>
+  </div>
+</section>
+
+<section>
+  <h2>Behavior &amp; UX</h2>
+  <h3>Web client, desktop browser</h3>
+  <div class="scroll"><pre class="mock">┌───────────────────────────────────────────────────────────────────────────┐
+│                                                                           │
+│                       remote desktop (Fit, centered)                      │
+│                                                                           │
+├───────────────────────────────────────────────────────────────────────────┤
+│ Connected to debian · 1920×1080 · 60 fps       [−] 100% [+]  [⤢ Fit ▾]    │
+│                                   [Display ▾] [Start audio] [Send file] [⛶] │
+└───────────────────────────────────────────────────────────────────────────┘
+
+ Display ▾ popover
+ ┌──────────────────────────────────────────┐
+ │ Resolution   (•) Follow window            │
+ │              ( ) Fixed [1920×1080 ▾] [60 Hz ▾] │
+ │                  custom  [____]×[____]    │
+ │ Pixel ratio  [Auto (1.25)] [1×] [1.5×] [2×] │
+ │ Target       (•) Virtual monitor           │
+ │              ( ) Real monitor              │
+ │ View         (•) Fit  ( ) Fill  ( ) 100%   │
+ └──────────────────────────────────────────┘</pre></div>
+
+  <h3>Phone (web or Android)</h3>
+  <div class="scroll"><pre class="mock">┌──────────────────────────────┐
+│  remote desktop, pinch-zoomed │
+│  (two-finger drag pans/scrolls│
+│   when zoomed in)             │
+│                               │
+├──────────────────────────────┤
+│ [Esc][Tab][Ctrl][Alt][Super]  │  ← extra keys, while the keyboard is up
+│ [←][↑][↓][→][Home][End][PgUp] │
+├──────────────────────────────┤
+│        phone keyboard          │
+└──────────────────────────────┘
+ toolbar (top-right, collapsible): [⌨] [🔍 100%] [Display]</pre></div>
+
+  <h3>Flows and edge cases</h3>
+  <ul>
+    <li><strong>Dragging the window edge:</strong> the picture scales live (view only); 300 ms after the edge stops, the host resizes. On KDE/GNOME the picture briefly shows the old size scaled until the new monitor's first frame (about 0.3–0.5 s).</li>
+    <li><strong>Switching Virtual to Real monitor mid-session:</strong> the virtual monitor's 60-second timer starts and the stream switches to the real monitor.</li>
+    <li><strong>Fixed size larger than the window:</strong> Fit shrinks it; 100% shows it at native size with panning.</li>
+    <li><strong>Real monitor without the mode:</strong> the setting keeps the requested size but shows "Not available on this monitor, showing 1920×1080 scaled".</li>
+    <li><strong>Host restarted:</strong> reconnect finds a new host process; virtual monitors from the old process are gone, so a new one is created.</li>
+    <li><strong>Sticky modifiers:</strong> tapping Ctrl lights it; the next key is sent with Ctrl held, then Ctrl releases. Double-tap locks it until tapped again.</li>
+    <li><strong>Long press:</strong> moving more than 10 px before 500 ms cancels the right click and starts a drag instead.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>Acceptance criteria</h2>
+  <div class="scroll"><table>
+    <thead><tr><th>ID</th><th>Check</th><th>Covers</th></tr></thead>
+    <tbody>
+      <tr><td class="id">A1</td><td>Headless Chrome on the sway virtual display at window 1400×900, ratio 1: the stream reports 1400×900; resizing the window to 1000×700 gives 1000×700 within 1.5 s.</td><td>R1, R2, R8</td></tr>
+      <tr><td class="id">A2</td><td>Same page, Fixed 1920×1080 at 60 Hz: stream 1920×1080, Fit shows it shrunk; 100% shows it at native size and the page pans; resizing the window does not change the stream size.</td><td>R1, R12</td></tr>
+      <tr><td class="id">A3</td><td>Headless KWin test desktop, Virtual monitor, window 1600×900: a new output of 1600×900 exists (listed by the KDE display tool) and is primary; frames come from it.</td><td>R3, R4, R6</td></tr>
+      <tr><td class="id">A4</td><td>Disconnect, reconnect after 20 s: same output name, a test window placed on it is still there; after 70 s disconnected the output is gone.</td><td>R5</td></tr>
+      <tr><td class="id">A5</td><td>Headless GNOME test desktop, Virtual monitor 1280×800: a virtual monitor of 1280×800 is listed by DisplayConfig and streamed.</td><td>R3, R4</td></tr>
+      <tr><td class="id">A6</td><td>Real monitor on the headless KWin desktop requesting a size it lists: the output switches mode. Requesting a size it does not list: mode unchanged, client shows the "not available" note and scales to fit.</td><td>R7</td></tr>
+      <tr><td class="id">A7</td><td>Ratio 2× on KDE and sway: the desktop's output scale reads 2 and the stream size is twice the window's CSS size.</td><td>R10, R11</td></tr>
+      <tr><td class="id">A8</td><td>View zoom 200% via Ctrl+wheel, pan to the lower-right, click a known point in the probe app: the probe logs the click at that remote point (±2 px). Repeated at Fit and Fill.</td><td>R13, R14</td></tr>
+      <tr><td class="id">A9</td><td>Reload the page after changing settings: the same resolution, ratio, target and view mode are in effect.</td><td>R15</td></tr>
+      <tr><td class="id">A10</td><td>Restart the host while a client is connected: the client shows "Reconnecting…" over the last picture and streams again within 12 s without a PIN prompt.</td><td>R16</td></tr>
+      <tr><td class="id">A11</td><td>Hide the web tab (CDP visibility emulation): host sent-frame count stops increasing; show it again: a keyframe arrives within 1 s.</td><td>R17</td></tr>
+      <tr><td class="id">A12</td><td>Touch emulation in headless Chrome and on the Android emulator: tap, long press, two-finger tap, three-finger tap and two-finger drag reach the probe app as left click, right click, right click, middle click and scroll; pinch changes the view zoom; four-finger tap toggles the keyboard.</td><td>R18</td></tr>
+      <tr><td class="id">A13</td><td>Sticky Ctrl then "c" on the extra-keys strip: the probe logs Ctrl+C; the next "c" arrives plain.</td><td>R19</td></tr>
+      <tr><td class="id">A14</td><td>Fullscreen in headless Chrome with keyboard lock granted: Ctrl+T reaches the probe app; Escape held for 1 s exits fullscreen.</td><td>R20</td></tr>
+      <tr><td class="id">A15</td><td>Native client: the display menu shows the same settings; window resize follows the window on the sway display (A1 equivalent); Ctrl+wheel zooms.</td><td>R1, R10, R12, R13, R15</td></tr>
+      <tr><td class="id">A16</td><td>Android emulator: toolbar visible, rotating the emulator in Follow window changes the stream to the new orientation's size.</td><td>R2, R19</td></tr>
+      <tr><td class="id">A17</td><td>Simulated Wi-Fi link (30 Mbit/s, 10–40 ms jitter, 0.5% loss, bursts of 1% for 2 s every 10 s) with a busy 1080p picture: fps never stays under 30 for more than 3 s, and the median is at least 50.</td><td>R21, R22</td></tr>
+      <tr><td class="id">A18</td><td>The existing WAN tests (squeeze to 1 Mbit/s and recovery) and the full phase-1 suite pass with the single controller.</td><td>R21</td></tr>
+      <tr><td class="id">A19</td><td>Forced keyframes during the A17 run: never more than 4 in any second.</td><td>R22</td></tr>
+      <tr><td class="id">A20</td><td><code>qr-host --profile lan</code> starts and prints a warning that the option has no effect.</td><td>R23</td></tr>
+      <tr><td class="id">A21</td><td>X11 host: the resolution settings are disabled with the note; the picture fits the window.</td><td>R9</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <h2>Risks</h2>
+  <ul>
+    <li><strong>KWin and mutter virtual monitor details</strong> (scale, refresh, making it primary, removal) are untested here. Handling: verify each with the headless test desktops early; if one isn't possible, note it in the client and keep the rest.</li>
+    <li><strong>Keyboard lock and phone keyboards vary by browser and device.</strong> Accept: test on headless Chrome and the Android emulator; real devices may differ.</li>
+    <li><strong>One controller for LAN and internet</strong> needs retuning of the existing WAN tests' expectations. Accept: A18 keeps them as the bar.</li>
+  </ul>
+</section>
+</main>

@@ -134,6 +134,20 @@ wan)
 	IP_host=10.10.1.2
 	IP_client=10.10.2.2
 	;;
+wifi)
+	# A Wi-Fi client: the host wired to the access point, the client on a
+	# 30 Mbit/s radio link with ±15 ms jitter and 0.5% loss.
+	node host
+	node ap
+	node client
+	link host eth0 10.20.1.2/24 ap eth1 10.20.1.1/24 rate 1gbit delay 0.2ms limit 100000
+	link client eth0 10.20.2.2/24 ap eth2 10.20.2.1/24 rate 30mbit delay 15ms 15ms distribution normal loss 0.5% limit 1000
+	router ap
+	on host ip route add default via 10.20.1.1
+	on client ip route add default via 10.20.2.1
+	IP_host=10.20.1.2
+	IP_client=10.20.2.2
+	;;
 nat-cone | nat-sym)
 	mode=cone
 	[[ "$topo" == nat-sym ]] && mode=sym

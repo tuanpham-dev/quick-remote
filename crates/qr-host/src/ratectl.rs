@@ -1,20 +1,21 @@
-//! Rate control from client feedback (every 50 ms).
+//! Rate control from client feedback (every 50 ms): one controller for every
+//! path, local or internet.
 //!
-//! LAN profile: a high fixed target, cut by 15% only when loss exceeds what
-//! FEC repairs, recovering 5% a second.
+//! The target grows while delivery is clean (8% a second near the last cut,
+//! doubling each second once the link has been quiet for 1.5 s) up to the default
+//! quality target, and backs off to 85% of what actually arrived when the
+//! link shows real congestion: loss that FEC could not repair in two windows
+//! in a row, a frame delay that keeps rising for three windows, or a queue
+//! above 80 ms in two windows. Single spikes (Wi-Fi jitter, a lost burst)
+//! cause no cut: cutting on each one starved Wi-Fi links down to 5 fps.
 //!
-//! Internet profile: delay-gradient control. While the frame transit delay
-//! is flat the target grows 8% a second; when it rises (queues building) or
-//! loss exceeds FEC, the target drops to 85% of what actually arrived. The
-//! worst-case reaction is two feedback intervals (100 ms).
-//!
-//! In both, the frame rate gives way before per-frame quality: when the
-//! bits per frame fall below a floor the frame rate steps down (to a minimum
-//! of 5 fps), and it steps back up once there is room for twice the floor.
+//! The frame rate gives way before per-frame quality: when the bits per
+//! frame fall below a floor the frame rate steps down (to a minimum of
+//! 5 fps), and it steps back up once there is room for twice the floor.
 
 use std::time::{Duration, Instant};
 
-use qr_proto::msg::{Feedback, Profile};
+use qr_proto::msg::Feedback;
 
 #[derive(Debug, Clone)]
 pub struct Limits {
@@ -30,8 +31,8 @@ impl Limits {
         self.width as f64 * self.height as f64
     }
 
-    /// Default LAN target: 0.25 bits per pixel per frame (31 Mbit/s at
-    /// 1080p60, 124 Mbit/s at 4K60), capped at `max_kbps`.
+    /// Default (and highest) target: 0.25 bits per pixel per frame
+    /// (31 Mbit/s at 1080p60, 124 Mbit/s at 4K60), capped at `max_kbps`.
     pub fn lan_target(&self) -> u32 {
         ((self.pixels() * self.max_fps as f64 * 0.25 / 1000.0) as u32).clamp(self.min_kbps, self.max_kbps)
     }
@@ -44,7 +45,6 @@ impl Limits {
 }
 
 pub struct RateCtl {
-    pub profile: Profile,
     limits: Limits,
     pub target_kbps: u32,
     pub fps: u32,
@@ -53,6 +53,11 @@ pub struct RateCtl {
     pub loss_ewma: f32,
     hold_increase_until: Option<Instant>,
     base_delay: Option<(i32, Instant)>,
+    /// Consecutive windows with unrepaired loss, with a rising delay, and
+    /// with a long queue.
+    lossy_windows: u32,
+    rising_windows: u32,
+    queued_windows: u32,
     last_change: Instant,
     /// The client can't decode this fast: frame-rate ceiling until when.
     decode_cap: Option<(u32, Instant)>,
@@ -65,21 +70,19 @@ pub struct RateCtl {
 pub const FPS_STEPS: [u32; 7] = [240, 144, 120, 60, 30, 15, 5];
 
 impl RateCtl {
-    pub fn new(profile: Profile, limits: Limits, now: Instant) -> Self {
-        let target = match profile {
-            Profile::Lan => limits.lan_target(),
-            Profile::Internet => 4_000u32.clamp(limits.min_kbps, limits.max_kbps),
-        };
+    pub fn new(limits: Limits, now: Instant) -> Self {
         let mut r = Self {
-            profile,
             fps: limits.max_fps,
+            target_kbps: limits.lan_target(),
             limits,
-            target_kbps: target,
-            parity: if profile == Profile::Lan { 0.10 } else { 0.20 },
+            parity: 0.10,
             // Assume some loss until feedback says otherwise.
             loss_ewma: 0.01,
             hold_increase_until: None,
             base_delay: None,
+            lossy_windows: 0,
+            rising_windows: 0,
+            queued_windows: 0,
             last_change: now,
             decode_cap: None,
             slow_windows: 0,
@@ -98,44 +101,43 @@ impl RateCtl {
         let loss = if sent_shards > 0 { fb.shards_lost as f32 / sent_shards as f32 } else { 0.0 };
         self.loss_ewma = self.loss_ewma * 0.8 + loss * 0.2;
         let rx_kbps = (fb.bytes_rx as f64 * 8.0 / window.as_secs_f64() / 1000.0) as u32;
-        let beyond_fec = fb.frames_lost > 0;
         let dt = window.as_secs_f64().min(0.5);
 
-        match self.profile {
-            Profile::Lan => {
-                if beyond_fec {
-                    self.decrease((self.target_kbps as f64 * 0.85) as u32, now);
-                } else if self.may_increase(now) {
-                    let cap = self.limits.lan_target();
-                    self.target_kbps = ((self.target_kbps as f64 * 1.05f64.powf(dt)) as u32 + 1).min(cap);
-                }
+        // Queueing delay relative to the lowest delay seen in the last 10 s.
+        let base = match self.base_delay {
+            Some((d, t)) if now.duration_since(t) < Duration::from_secs(10) && d <= fb.delay_min_us => d,
+            _ => {
+                self.base_delay = Some((fb.delay_min_us, now));
+                fb.delay_min_us
             }
-            Profile::Internet => {
-                // Queueing delay relative to the lowest delay seen recently.
-                let base = match self.base_delay {
-                    Some((d, t)) if now.duration_since(t) < Duration::from_secs(10) && d <= fb.delay_min_us => d,
-                    _ => {
-                        self.base_delay = Some((fb.delay_min_us, now));
-                        fb.delay_min_us
-                    }
-                };
-                let queueing_ms = (fb.delay_max_us - base) as f64 / 1000.0;
-                let rising = fb.delay_slope > 3_000 && queueing_ms > 5.0;
-                if beyond_fec || rising || queueing_ms > 40.0 {
-                    let to = if rx_kbps > 0 { (rx_kbps as f64 * 0.85) as u32 } else { self.target_kbps / 2 };
-                    self.decrease(to.min((self.target_kbps as f64 * 0.95) as u32), now);
-                } else if self.may_increase(now) && rx_kbps as f64 >= self.target_kbps as f64 * 0.6 {
-                    // Only grow when the stream actually uses the budget;
-                    // a still screen sends little and proves nothing. Grow
-                    // 8%/s near the last congestion point, 50%/s once the
-                    // link has been quiet for 3 s (recovering from a squeeze
-                    // at 8%/s alone takes ~40 s).
-                    let quiet =
-                        self.hold_increase_until.is_none_or(|t| now.duration_since(t) >= Duration::from_millis(2500));
-                    let g: f64 = if quiet { 1.5 } else { 1.08 };
-                    self.target_kbps = ((self.target_kbps as f64 * g.powf(dt)) as u32 + 1).min(self.limits.max_kbps);
-                }
-            }
+        };
+        let queueing_ms = (fb.delay_max_us - base) as f64 / 1000.0;
+        // A window in which nothing arrived carries no delay information
+        // (a squeezed link delivers only a few frames a second): it neither
+        // continues nor breaks a run.
+        if fb.frames_rx > 0 || fb.frames_lost > 0 {
+            let count = |n: &mut u32, hit: bool| *n = if hit { *n + 1 } else { 0 };
+            count(&mut self.lossy_windows, fb.frames_lost > 0);
+            let arrived = fb.frames_rx > 0;
+            count(&mut self.rising_windows, arrived && fb.delay_slope > 3_000 && queueing_ms > 8.0);
+            count(&mut self.queued_windows, arrived && queueing_ms > 80.0);
+        }
+        let congested = self.lossy_windows >= 2 || self.rising_windows >= 3 || self.queued_windows >= 2;
+        if congested {
+            let to = if rx_kbps > 0 { (rx_kbps as f64 * 0.85) as u32 } else { (self.target_kbps as f64 * 0.7) as u32 };
+            self.decrease(to.min((self.target_kbps as f64 * 0.95) as u32), now);
+            (self.lossy_windows, self.rising_windows, self.queued_windows) = (0, 0, 0);
+        } else if self.may_increase(now)
+            && fb.frames_lost == 0
+            && (rx_kbps as f64 >= self.target_kbps as f64 * 0.6 || self.target_kbps < self.limits.lan_target() / 4)
+        {
+            // Grow only while the stream uses the budget (a still screen
+            // proves nothing), except from deep below the default, where
+            // waiting for a busy screen would leave a squeeze in place.
+            let quiet =
+                self.hold_increase_until.is_none_or(|t| now.duration_since(t) >= Duration::from_millis(1500));
+            let g: f64 = if quiet { 2.0 } else { 1.08 };
+            self.target_kbps = ((self.target_kbps as f64 * g.powf(dt)) as u32 + 1).min(self.limits.lan_target());
         }
         // A client whose decoder falls behind (more than two frame times per
         // frame) builds a backlog of latency; step the frame rate down for
@@ -163,8 +165,7 @@ impl RateCtl {
             self.decode_cap = None;
         }
         // Parity follows loss: twice the observed loss plus 5%.
-        let (lo, hi) = if self.profile == Profile::Lan { (0.10, 0.25) } else { (0.20, 0.50) };
-        self.parity = (self.loss_ewma * 2.0 + 0.05).clamp(lo, hi);
+        self.parity = (self.loss_ewma * 2.0 + 0.05).clamp(0.10, 0.50);
         self.fit_fps();
         let after = (self.target_kbps, self.fps, (self.parity * 100.0) as u32);
         if after != before {
@@ -233,26 +234,48 @@ mod tests {
     }
 
     #[test]
-    fn lan_defaults_and_backoff_on_unrepaired_loss() {
+    fn starts_at_the_default_and_cuts_only_on_persistent_loss() {
         let t0 = Instant::now();
-        let mut r = RateCtl::new(Profile::Lan, limits(), t0);
+        let mut r = RateCtl::new(limits(), t0);
         assert_eq!(r.target_kbps, 31_104);
         assert_eq!(r.fps, 60);
-        r.on_feedback(&fb(190_000, 0, 1, (0, 0, 0)), t0);
-        assert_eq!(r.target_kbps, 26_438);
-        // No growth for 500 ms after a cut.
-        r.on_feedback(&fb(190_000, 0, 0, (0, 0, 0)), t0 + Duration::from_millis(200));
-        assert_eq!(r.target_kbps, 26_438);
-        for i in 0..200 {
-            r.on_feedback(&fb(190_000, 0, 0, (0, 0, 0)), t0 + Duration::from_millis(600 + i * 50));
+        let ms = |n| t0 + Duration::from_millis(n);
+        // One lossy window (a burst): no cut.
+        r.on_feedback(&fb(190_000, 0, 1, (0, 0, 0)), ms(0));
+        r.on_feedback(&fb(190_000, 0, 0, (0, 0, 0)), ms(50));
+        assert_eq!(r.target_kbps, 31_104);
+        // Two in a row: cut to 85% of what arrived (30.4 Mbit/s).
+        r.on_feedback(&fb(190_000, 0, 1, (0, 0, 0)), ms(100));
+        r.on_feedback(&fb(190_000, 0, 1, (0, 0, 0)), ms(150));
+        assert_eq!(r.target_kbps, 25_840);
+        // No growth for 500 ms after a cut, then back to the default.
+        r.on_feedback(&fb(190_000, 0, 0, (0, 0, 0)), ms(300));
+        assert_eq!(r.target_kbps, 25_840);
+        for i in 0..100 {
+            r.on_feedback(&fb(190_000, 0, 0, (0, 0, 0)), ms(700 + i * 50));
         }
-        assert_eq!(r.target_kbps, 31_104, "recovers to the LAN target, not beyond");
+        assert_eq!(r.target_kbps, 31_104, "recovers to the default, not beyond");
     }
 
     #[test]
-    fn internet_converges_below_link_and_drops_fps_first() {
+    fn jitter_alone_does_not_cut() {
         let t0 = Instant::now();
-        let mut r = RateCtl::new(Profile::Internet, limits(), t0);
+        let mut r = RateCtl::new(limits(), t0);
+        // Wi-Fi: delay between 10 and 50 ms, slope up and down window by
+        // window, nothing lost.
+        for i in 0..400u64 {
+            let up = i % 2 == 0;
+            let f = fb(190_000, 0, 0, (10_000, if up { 50_000 } else { 20_000 }, if up { 8_000 } else { -8_000 }));
+            r.on_feedback(&f, t0 + Duration::from_millis(i * 50));
+        }
+        assert_eq!(r.target_kbps, 31_104);
+        assert_eq!(r.fps, 60);
+    }
+
+    #[test]
+    fn converges_below_a_slow_link_and_drops_fps_first() {
+        let t0 = Instant::now();
+        let mut r = RateCtl::new(limits(), t0);
         // A 10 Mbit/s link: while the target is under it, delay is flat and
         // everything arrives; above it, delay climbs and arrivals cap.
         let mut t = t0;
@@ -280,12 +303,40 @@ mod tests {
         }
         assert!(r.target_kbps <= 1_100, "target {}", r.target_kbps);
         assert!(r.fps <= 15, "fps {}", r.fps);
+
+        // The squeeze lifts: back at full rate within 5 s.
+        for _ in 0..100 {
+            t += Duration::from_millis(50);
+            let f = fb(r.target_kbps * 50 / 8, 0, 0, (25_000, 26_000, 0));
+            r.on_feedback(&f, t);
+        }
+        assert_eq!(r.fps, 60, "target {}", r.target_kbps);
+    }
+
+    #[test]
+    fn a_squeeze_with_mostly_empty_windows_still_cuts() {
+        let t0 = Instant::now();
+        let mut r = RateCtl::new(limits(), t0);
+        // 1 Mbit/s link while sending ~31: a frame gets through every
+        // fourth window, each later than the last.
+        let mut t = t0;
+        for i in 0..40u32 {
+            t += Duration::from_millis(50);
+            let f = if i % 4 == 0 {
+                let d = 30_000 + i as i32 * 20_000;
+                Feedback { frames_rx: 1, ..fb(6_000, 0, 0, (d, d + 10_000, 20_000)) }
+            } else {
+                Feedback { frames_rx: 0, shards_rx: 0, ..fb(0, 0, 0, (0, 0, 0)) }
+            };
+            r.on_feedback(&f, t);
+        }
+        assert!(r.target_kbps < 5_000, "target {}", r.target_kbps);
     }
 
     #[test]
     fn slow_decoder_lowers_fps_then_recovers() {
         let t0 = Instant::now();
-        let mut r = RateCtl::new(Profile::Lan, limits(), t0);
+        let mut r = RateCtl::new(limits(), t0);
         let mut f = fb(190_000, 0, 0, (0, 0, 0));
         let ms = |n| t0 + Duration::from_millis(n);
         f.decode_us = 80_000; // 80 ms per frame at 60 fps
@@ -314,7 +365,7 @@ mod tests {
     #[test]
     fn parity_tracks_loss() {
         let t0 = Instant::now();
-        let mut r = RateCtl::new(Profile::Internet, limits(), t0);
+        let mut r = RateCtl::new(limits(), t0);
         for i in 0..40 {
             r.on_feedback(&fb(10_000, 10, 0, (0, 0, 0)), t0 + Duration::from_millis(i * 50));
         }

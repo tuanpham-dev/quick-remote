@@ -25,11 +25,9 @@ fn is_private(ip: IpAddr) -> bool {
     }
 }
 
-/// LAN when the peer has a private address and the round trip is short.
-pub fn pick_profile(forced: Option<Profile>, conn: &quinn::Connection, web: &crate::web::WebPeers) -> Profile {
-    if let Some(p) = forced {
-        return p;
-    }
+/// Where the peer is, for the client's stats only (one rate controller
+/// serves every path): LAN for a private address, else internet.
+pub fn path_class(conn: &quinn::Connection, web: &crate::web::WebPeers) -> Profile {
     // A browser behind the web gateway: judge by its own path.
     let (ip, rtt) = web
         .0
@@ -39,7 +37,9 @@ pub fn pick_profile(forced: Option<Profile>, conn: &quinn::Connection, web: &cra
         .filter(|_| conn.remote_address().ip().is_loopback())
         .map(|p| (p.addr.ip(), p.rtt))
         .unwrap_or((conn.remote_address().ip(), conn.rtt()));
-    if is_private(ip) && rtt < Duration::from_millis(5) { Profile::Lan } else { Profile::Internet }
+    let lan = is_private(ip);
+    tracing::info!(%ip, rtt_ms = rtt.as_secs_f64() * 1000.0, lan, "path");
+    if lan { Profile::Lan } else { Profile::Internet }
 }
 
 pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) -> Result<()> {
@@ -55,7 +55,7 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
         bail!(text);
     };
 
-    let profile = pick_profile(ctx.args.profile(), &conn, &ctx.web_peers);
+    let profile = path_class(&conn, &ctx.web_peers);
     let mode = ctx.display_mode(want_width, want_height, want_refresh);
     tracing::info!(client = %client_name, ?profile, encoder = enc.element, ?mode, "session start");
     send(
@@ -103,7 +103,7 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
         .map(|p| p.max_datagram);
     let enc444 = probe::choose_444(&allowed_encoders(&ctx), &decoders);
     let video =
-        Arc::new(Video::new(ctx.clone(), conn.clone(), enc.clone(), enc444, profile, max_datagram, ctl.clone()));
+        Arc::new(Video::new(ctx.clone(), conn.clone(), enc.clone(), enc444, max_datagram, ctl.clone()));
     video.start(0, 0, mode).await?;
     let _audio = match crate::media::start_audio(&ctx, &conn) {
         Ok(a) => a,
@@ -274,7 +274,13 @@ async fn control_loop(
             Msg::PadDetach { idx } => ctx.input.pad_detach(idx),
             Msg::FrameLost { stream, .. } | Msg::KeyframeReq { stream } => {
                 if let Some(s) = video.stream(stream) {
-                    s.frame_lost(conn.rtt().max(Duration::from_millis(30)));
+                    // At most one forced keyframe per 250 ms (or two round
+                    // trips): a keyframe is many times a frame's budget, and
+                    // on a link that is already losing, one per loss (a
+                    // browser's round trip here is the local gateway's,
+                    // near zero) keeps the link full of keyframes that are
+                    // lost in turn.
+                    s.frame_lost((conn.rtt() * 2).max(Duration::from_millis(250)));
                 }
             }
             Msg::SetMode { modes } => {

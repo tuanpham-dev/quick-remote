@@ -111,7 +111,7 @@ impl VideoStream {
     }
 
     /// A frame could not be rebuilt on the client: send a keyframe, at most
-    /// once per `min_gap` (about one RTT) so a burst of losses costs one.
+    /// once per `min_gap` so a burst of losses costs one.
     pub fn frame_lost(&self, min_gap: Duration) {
         let mut last = self.last_keyframe_req.lock().expect("lock");
         let now = Instant::now();
@@ -119,6 +119,7 @@ impl VideoStream {
             return;
         }
         *last = Some(now);
+        tracing::debug!("forced keyframe");
         self.encoder.force_keyframe();
     }
 
@@ -188,8 +189,23 @@ async fn send_loop(
         };
         let frame_id = next_frame.fetch_add(1, Ordering::Relaxed);
         let dgrams = pk.frame(frame_id, if f.keyframe { vflags::KEYFRAME } else { 0 }, &meta, &f.au);
+        // Paced, not in one burst: a busy 1080p frame is a couple of
+        // hundred datagrams, and Wi-Fi access points (and a browser's
+        // receive queue) drop the tail of a burst sent at wire speed. The
+        // pace is three times the target bitrate (at least 20 Mbit/s), and
+        // a frame never takes more than 25 ms to go out.
+        let frame_bits: f64 = dgrams.iter().map(|d| d.len() as f64 * 8.0).sum();
+        let target_bps = refresh.target_kbps.load(Ordering::Relaxed) as f64 * 1000.0;
+        let pace_bps = (target_bps * 3.0).max(20e6).max(frame_bits / 0.025);
+        let start = tokio::time::Instant::now();
+        let mut sent_bits = 0.0;
         let mut bytes = 0u64;
         for d in dgrams {
+            let due = start + Duration::from_secs_f64(sent_bits / pace_bps);
+            if due > tokio::time::Instant::now() + Duration::from_millis(1) {
+                tokio::time::sleep_until(due).await;
+            }
+            sent_bits += d.len() as f64 * 8.0;
             bytes += d.len() as u64;
             if let Err(e) = conn.send_datagram(Bytes::from(d)) {
                 tracing::info!("video send stopped: {e}");
