@@ -121,7 +121,7 @@ pub fn source_desc(s: &Source, w: u32, h: u32, fps: u32) -> String {
             let fd = fd.map(|f| format!(" fd={f}")).unwrap_or_default();
             // System memory: the converter in front of the encoder can't
             // take DMA-BUF.
-            format!("pipewiresrc{fd} path={node} always-copy=false do-timestamp=true keepalive-time=1000 ! video/x-raw")
+            format!("pipewiresrc{fd} name=pwsrc path={node} always-copy=false do-timestamp=true keepalive-time=1000 ! video/x-raw")
         }
         // Variable rate (frames come on damage); timestamped on push.
         Source::App { format } => format!(
@@ -317,6 +317,15 @@ impl Encoder {
             set_prop(&p, "config-interval", "-1");
         }
         configure(&enc, e.family, cfg);
+        // What a desktop's PipeWire stream settled on (format, size, rate):
+        // streams that stall or crawl differ here.
+        if let Some(pad) = pipeline.by_name("pwsrc").and_then(|s| s.static_pad("src")) {
+            pad.connect_notify(Some("caps"), |pad, _| {
+                if let Some(caps) = pad.current_caps() {
+                    tracing::info!(%caps, "PipeWire capture format");
+                }
+            });
+        }
         // The VA encoders output asynchronously, two frames late, when
         // upstream answers the latency query as not live, which pipewiresrc
         // does. Every source here is live: say so.
