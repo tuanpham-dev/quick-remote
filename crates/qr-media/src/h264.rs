@@ -9,6 +9,12 @@
 //!
 //! `max_dec_frame_buffering` is the last field of the SPS, so the rewrite
 //! copies the bits before it, writes the new value and closes the RBSP.
+//!
+//! libopenh264 holds a picture of any stream not labelled Baseline for
+//! possible reordering, whatever the SPS says about reordering. Our streams
+//! never reorder (no B-frames), so for openh264dec the SPS is relabelled
+//! Baseline ([`baseline_sps`]); its decoder still follows the PPS for CABAC
+//! and 8×8 transforms, so the pictures come out the same.
 
 struct Bits<'a> {
     d: &'a [u8],
@@ -252,9 +258,56 @@ pub fn fix_sps(nal: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// The access unit (Annex B) with any SPS fixed by [`fix_sps`], or `None`
-/// when nothing changed.
-pub fn fix_au(au: &[u8]) -> Option<Vec<u8>> {
+/// The rest of an RBSP from `r`'s position, up to its stop bit.
+fn copy_rest(r: &mut Bits, rbsp: &[u8], w: &mut Writer) -> Option<()> {
+    let last = rbsp.iter().rposition(|&b| b != 0)?;
+    let stop = last * 8 + 7 - rbsp[last].trailing_zeros() as usize;
+    let mut left = stop.checked_sub(r.p)?;
+    while left > 0 {
+        let n = left.min(24) as u32;
+        w.put(r.u(n)?, n);
+        left -= n as usize;
+    }
+    Some(())
+}
+
+/// The SPS relabelled Baseline (profile_idc 66), or `None` when it already
+/// is or can't be: a High-family SPS is only rewritten when the fields it
+/// drops hold their defaults (4:2:0, 8 bits, no scaling matrices).
+pub fn baseline_sps(nal: &[u8]) -> Option<Vec<u8>> {
+    if nal.first()? & 0x1f != 7 {
+        return None;
+    }
+    let rbsp = unescape(&nal[1..]);
+    let mut r = Bits { d: &rbsp, p: 0 };
+    let profile = r.u(8)?;
+    let flags_level = r.u(16)?;
+    let id = r.ue()?;
+    match profile {
+        66 => return None,
+        77 | 88 => {}
+        100 => {
+            let (chroma, luma, chroma_depth, _) = (r.ue()?, r.ue()?, r.ue()?, r.u(1)?);
+            if chroma != 1 || luma != 0 || chroma_depth != 0 || r.u(1)? != 0 {
+                return None;
+            }
+        }
+        _ => return None,
+    }
+    let mut w = Writer::default();
+    w.put(66, 8);
+    w.put(flags_level, 16);
+    w.ue(id);
+    copy_rest(&mut r, &rbsp, &mut w)?;
+    let mut out = vec![nal[0]];
+    out.extend(escape(&w.finish()));
+    Some(out)
+}
+
+/// The access unit (Annex B) with any SPS fixed by [`fix_sps`] (and with
+/// `baseline`, relabelled by [`baseline_sps`]), or `None` when nothing
+/// changed.
+pub fn fix_au(au: &[u8], baseline: bool) -> Option<Vec<u8>> {
     // NAL boundaries: (payload start, payload end).
     let mut starts = Vec::new();
     let mut i = 0;
@@ -273,9 +326,12 @@ pub fn fix_au(au: &[u8]) -> Option<Vec<u8>> {
         while end > s && au[end - 1] == 0 && k + 1 < starts.len() {
             end -= 1; // a four-byte start code's leading zero
         }
-        if au.get(s).is_some_and(|h| h & 0x1f == 7)
-            && let Some(sps) = fix_sps(&au[s..end])
-        {
+        let sps = au.get(s).filter(|h| *h & 0x1f == 7).and_then(|_| {
+            let dpb = fix_sps(&au[s..end]);
+            let nal = dpb.as_deref().unwrap_or(&au[s..end]);
+            baseline.then(|| baseline_sps(nal)).flatten().or(dpb)
+        });
+        if let Some(sps) = sps {
             let o = out.get_or_insert_with(Vec::new);
             o.extend_from_slice(&au[copied..s]);
             o.extend_from_slice(&sps);
@@ -341,9 +397,30 @@ mod tests {
         let mut au = vec![0, 0, 0, 1, 9, 0x10, 0, 0, 0, 1];
         au.extend(&sps);
         au.extend([0, 0, 0, 1, 0x68, 0xef, 0x3c, 0xb0, 0, 0, 1, 0x65, 0x88]);
-        let fixed = fix_au(&au).expect("SPS fixed");
+        let fixed = fix_au(&au, false).expect("SPS fixed");
         assert!(fixed.windows(4).any(|w| w == [0x68, 0xef, 0x3c, 0xb0]), "PPS kept");
         assert!(fixed.ends_with(&[0, 0, 1, 0x65, 0x88]), "slice kept");
-        assert!(fix_au(&fixed).is_none());
+        assert!(fix_au(&fixed, false).is_none());
+        let base = fix_au(&au, true).expect("relabelled");
+        assert!(fix_au(&base, true).is_none(), "nothing left to change");
+    }
+
+    #[test]
+    fn relabels_high_as_baseline() {
+        let sps = hex("67640016acb405017fcb80b5060606a5000003000100000300148f162ea0");
+        let fixed = fix_sps(&sps).unwrap();
+        let base = baseline_sps(&fixed).expect("4:2:0 8-bit High");
+        let rbsp = unescape(&base[1..]);
+        assert_eq!(rbsp[0], 66);
+        // Same SPS after the dropped High fields: the DPB fix survives.
+        assert!(fix_sps(&base).is_none());
+        // Main has the Baseline syntax: only the label changes.
+        let mut main = unescape(&fixed[1..]);
+        main[0] = 77;
+        let mut nal = vec![0x67];
+        nal.extend(escape(&main));
+        let b = unescape(&baseline_sps(&nal).unwrap()[1..]);
+        assert_eq!(b[0], 66);
+        assert_eq!(b[1..], main[1..]);
     }
 }

@@ -135,7 +135,9 @@ impl Decoder {
     pub fn push(&self, frame_id: u32, au: &[u8], keyframe: bool) -> Result<()> {
         // Keyframes carry the SPS: make sure it leaves the decoder a free
         // DPB slot (see `h264`), else every picture waits for the next.
-        let fixed = (keyframe && self.codec == Codec::H264).then(|| crate::h264::fix_au(au)).flatten();
+        // openh264dec also needs a Baseline label to output at once.
+        let baseline = self.element == "openh264dec";
+        let fixed = (keyframe && self.codec == Codec::H264).then(|| crate::h264::fix_au(au, baseline)).flatten();
         let mut buf = gst::Buffer::from_slice(fixed.unwrap_or_else(|| au.to_vec()));
         {
             let b = buf.get_mut().expect("unique");
