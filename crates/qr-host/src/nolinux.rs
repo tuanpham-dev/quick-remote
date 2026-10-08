@@ -95,6 +95,38 @@ pub mod mutter {
     }
 }
 
+pub mod kwin {
+    use std::convert::Infallible;
+    use std::path::{Path, PathBuf};
+
+    use anyhow::{Result, bail};
+    use qr_proto::Monitor;
+
+    pub struct KwinSession {
+        pub socket: PathBuf,
+        never: Infallible,
+    }
+
+    pub fn supported(_socket: &Path) -> bool {
+        false
+    }
+
+    impl KwinSession {
+        pub fn start(_socket: &Path, _fps: u32) -> Result<Self> {
+            bail!("KDE's screencast needs Linux")
+        }
+        pub fn monitors(&self) -> Vec<Monitor> {
+            match self.never {}
+        }
+        pub fn node(&self, _monitor: u8) -> Option<u32> {
+            match self.never {}
+        }
+        pub fn injector(&self) -> Result<super::mutter::MutterInput> {
+            match self.never {}
+        }
+    }
+}
+
 pub mod screencopy {
     use std::convert::Infallible;
     use std::path::Path;

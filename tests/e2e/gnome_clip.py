@@ -33,8 +33,6 @@ TEXT = "text/plain;charset=utf-8"
 
 if sys.argv[1] == "set-text":
     data = sys.argv[2].encode()
-    call("SetSelection", GLib.Variant("(a{sv})", ({"mime-types": GLib.Variant("as", [TEXT])},)))
-
     def transfer(_c, _s, _p, _i, _sig, params):
         mime, serial = params.unpack()
         fd = call_fd("SelectionWrite", GLib.Variant("(u)", (serial,)))
@@ -43,7 +41,9 @@ if sys.argv[1] == "set-text":
         os.close(fd)
         call("SelectionWriteDone", GLib.Variant("(ub)", (serial, True)))
 
+    # Listen before owning the selection: a reader may ask right away.
     bus.signal_subscribe(RD, S, "SelectionTransfer", path, None, 0, transfer)
+    call("SetSelection", GLib.Variant("(a{sv})", ({"mime-types": GLib.Variant("as", [TEXT])},)))
     GLib.timeout_add(8000, loop.quit)
     loop.run()
 else:

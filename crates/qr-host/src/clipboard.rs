@@ -16,7 +16,10 @@ pub struct Clipboard {
 pub async fn start(ctx: &HostCtx, ctl: qr_net::files::Control) -> Option<Clipboard> {
     // A Wayland desktop or the virtual display: wlr-data-control.
     #[cfg(target_os = "linux")]
-    let wayland = ctx.screencopy_socket().map(|s| crate::wlclip::spawn(&s));
+    let wayland = ctx
+        .screencopy_socket()
+        .or_else(|| ctx.kwin.as_ref().map(|k| k.socket.clone()))
+        .map(|s| crate::wlclip::spawn(&s));
     #[cfg(not(target_os = "linux"))]
     let wayland: Option<anyhow::Result<_>> = None;
     // GNOME: the remote-desktop session's selection.

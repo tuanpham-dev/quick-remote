@@ -3,7 +3,7 @@
 //! which characters must go another way. Read as a plain client: the seat's
 //! keyboard sends its keymap (and again on every change) with no surface.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::io::Read;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
@@ -13,7 +13,9 @@ use anyhow::{Context, Result, bail};
 use wayland_client::protocol::{wl_keyboard, wl_registry, wl_seat};
 use wayland_client::{Connection, Dispatch, QueueHandle, WEnum};
 
-pub type Keysyms = Arc<RwLock<HashSet<u32>>>;
+/// Each keysym's key (XKB keycode: evdev + 8) and shift level (0 plain,
+/// 1 Shift, 2 AltGr, 3 both), the lowest level first layout found.
+pub type Keysyms = Arc<RwLock<HashMap<u32, (u32, u32)>>>;
 
 struct State {
     seat: Option<wl_seat::WlSeat>,
@@ -80,13 +82,13 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for State {
     }
 }
 
-/// Every keysym on any key, layout and level of an XKB keymap.
-fn keysyms(text: &[u8]) -> Result<HashSet<u32>> {
+/// Every keysym of an XKB keymap, with where it is.
+fn keysyms(text: &[u8]) -> Result<HashMap<u32, (u32, u32)>> {
     use xkbcommon_dl::{xkb_context_flags, xkb_keymap_compile_flags, xkb_keymap_format};
     let x = xkbcommon_dl::xkbcommon_option().context("libxkbcommon is not installed")?;
     let text = text.split(|&b| b == 0).next().unwrap_or_default();
     let text = std::ffi::CString::new(text)?;
-    let mut out = HashSet::new();
+    let mut out: HashMap<u32, (u32, u32)> = HashMap::new();
     // SAFETY: libxkbcommon calls as documented; the keymap and context are
     // released, and the keysym arrays are read within their lengths.
     unsafe {
@@ -110,7 +112,12 @@ fn keysyms(text: &[u8]) -> Result<HashSet<u32>> {
                     let mut syms = std::ptr::null();
                     let n = (x.xkb_keymap_key_get_syms_by_level)(km, kc, layout, level, &mut syms);
                     if n > 0 && !syms.is_null() {
-                        out.extend(std::slice::from_raw_parts(syms, n as usize));
+                        for &sym in std::slice::from_raw_parts(syms, n as usize) {
+                            let better = out.get(&sym).is_none_or(|&(_, l)| level < l);
+                            if layout == 0 && better || !out.contains_key(&sym) {
+                                out.insert(sym, (kc, level));
+                            }
+                        }
                     }
                 }
             }
@@ -160,8 +167,9 @@ mod tests {
     fn reads_a_keymap() {
         let Ok(text) = crate::wlinput::default_keymap() else { return };
         let syms = super::keysyms(text.as_bytes()).unwrap();
-        assert!(syms.contains(&('q' as u32)));
-        assert!(syms.contains(&('Q' as u32)));
-        assert!(!syms.contains(&(0x0100_0000 | '漢' as u32)));
+        // US layout: q is evdev 16 (XKB 24), Q its Shift level.
+        assert_eq!(syms.get(&('q' as u32)), Some(&(24, 0)));
+        assert_eq!(syms.get(&('Q' as u32)), Some(&(24, 1)));
+        assert!(!syms.contains_key(&(0x0100_0000 | '漢' as u32)));
     }
 }

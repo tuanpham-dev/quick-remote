@@ -1,0 +1,12 @@
+# KWin shows its screencast and fake-input protocols only to programs whose
+# desktop file lists them. For a system install of qr-host in /usr/bin:
+# /usr/share/applications/quickremote-host.desktop. (A host run from
+# elsewhere writes its own into ~/.local/share/applications on first start.)
+[Desktop Entry]
+Type=Application
+Name=QuickRemote host
+Comment=Remote desktop host
+Exec=/usr/bin/qr-host
+Icon=preferences-desktop-remote-desktop
+NoDisplay=true
+X-KDE-Wayland-Interfaces=zkde_screencast_unstable_v1,org_kde_kwin_fake_input

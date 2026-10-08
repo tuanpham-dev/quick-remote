@@ -411,7 +411,7 @@ impl Injector for MutterInput {
             let k = keysym(c);
             let typeable = c.is_ascii_control()
                 || match &self.keymap {
-                    Some(m) => m.read().unwrap().contains(&k),
+                    Some(m) => m.read().unwrap().contains_key(&k),
                     None => c.is_ascii(),
                 };
             if typeable {

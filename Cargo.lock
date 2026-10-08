@@ -3330,6 +3330,7 @@ dependencies = [
  "wayland-client",
  "wayland-protocols",
  "wayland-protocols-misc",
+ "wayland-protocols-plasma",
  "wayland-protocols-wlr",
  "windows",
  "windows-service",

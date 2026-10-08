@@ -364,6 +364,9 @@ impl HostCtx {
         if let Some(m) = &self.mutter {
             return m.monitors();
         }
+        if let Some(k) = &self.kwin {
+            return k.monitors();
+        }
         if let Some(socket) = &self.wl_socket {
             match crate::screencopy::monitors(socket, self.args.fps) {
                 Ok(m) if !m.is_empty() => return m,
@@ -428,7 +431,8 @@ impl HostCtx {
         {
             return Source::D3d11Handle { handle: w.handle };
         }
-        if let Some(node) = self.mutter.as_ref().and_then(|m| m.node(mon.id)) {
+        let node = self.mutter.as_ref().and_then(|m| m.node(mon.id));
+        if let Some(node) = node.or_else(|| self.kwin.as_ref().and_then(|k| k.node(mon.id))) {
             return Source::PipeWire { fd: None, node };
         }
         match self.source() {

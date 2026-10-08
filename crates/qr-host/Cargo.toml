@@ -42,6 +42,7 @@ futures-util = "0.3"
 wayland-client = "0.31"
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 wayland-protocols-misc = { version = "0.3", features = ["client"] }
+wayland-protocols-plasma = { version = "0.3", features = ["client"] }
 xkbcommon-dl = "0.4"
 wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
 khronos-egl = { version = "6", features = ["dynamic"] }
