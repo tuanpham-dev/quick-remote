@@ -94,6 +94,8 @@ pub struct Handle {
     delays: Mutex<Vec<(i64, i64)>>,
     decode_us: AtomicI64,
     tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    /// The host's protocol minor version: display requests and pause need 1+.
+    host_minor: u16,
 }
 
 impl Handle {
@@ -137,6 +139,13 @@ impl Handle {
 
     pub fn control(&self, m: Msg) {
         let _ = self.ctl.send(m);
+    }
+
+    /// Sends `m` if the host knows it (display requests, pause: 1.1+).
+    pub fn control_v1_1(&self, m: Msg) {
+        if self.host_minor >= 1 {
+            self.control(m);
+        }
     }
 
     pub fn input(&self, e: InputEvent) {
@@ -312,7 +321,7 @@ pub fn connect(
             decoders: caps(codecs),
         };
         let s = client_handshake(&conn, id.fingerprint, hello, &keystore, pin.as_deref(), expect_fp).await?;
-        start(conn, s.control_tx, s.control_rx, ep).await
+        start(conn, s.control_tx, s.control_rx, ep, s.host_minor).await
     })
 }
 
@@ -321,6 +330,7 @@ async fn start(
     control_tx: FramedSend,
     mut control_rx: qr_net::session::FramedRecv,
     ep: quinn::Endpoint,
+    host_minor: u16,
 ) -> Result<i64> {
     let (ctl, mut ctl_rx) = mpsc::unbounded_channel::<Msg>();
     let (input, mut input_rx) = mpsc::unbounded_channel::<InputEvent>();
@@ -346,6 +356,7 @@ async fn start(
         delays: Mutex::default(),
         decode_us: AtomicI64::new(0),
         tasks: Mutex::default(),
+        host_minor,
     });
     let mut tasks = Vec::new();
     // Control writer.
@@ -392,6 +403,9 @@ async fn start(
                     Ok(Msg::Clipboard { kind: 1, data }) => {
                         h.event(serde_json::json!({"t": "clipboard", "text": String::from_utf8_lossy(&data)}))
                     }
+                    Ok(Msg::DisplayInfo { stream: 0, kind, width, height, scale_pct, note }) => h.event(
+                        serde_json::json!({"t": "display", "kind": kind, "width": width, "height": height, "scale": scale_pct, "note": note}),
+                    ),
                     Ok(Msg::FileOffer { id, .. }) => {
                         // Files from the host aren't supported on Android yet.
                         h.control(Msg::FileCancel { id, reason: "not supported on this client".into() })

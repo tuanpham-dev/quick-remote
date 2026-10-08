@@ -188,6 +188,38 @@ pub extern "system" fn Java_dev_quickremote_Native_wheel(_env: JNIEnv, _c: JClas
     }
 }
 
+/// Asks for a screen of `w`×`h` at `hz` (0: the host's) and `scale_pct`;
+/// `target` 0 = a virtual monitor of its own, 1 = the real monitor.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_quickremote_Native_displayRequest(
+    _env: JNIEnv,
+    _c: JClass,
+    h: jlong,
+    w: jint,
+    hgt: jint,
+    hz: jint,
+    scale_pct: jint,
+    target: jint,
+) {
+    if let Some(s) = session(h) {
+        s.control_v1_1(qr_proto::Msg::DisplayRequest {
+            stream: 0,
+            width: w.clamp(0, u16::MAX as i32) as u16,
+            height: hgt.clamp(0, u16::MAX as i32) as u16,
+            refresh: hz.clamp(0, 1000) as u16,
+            scale_pct: scale_pct.clamp(50, 400) as u16,
+            target: target as u8,
+        });
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_quickremote_Native_pause(_env: JNIEnv, _c: JClass, h: jlong, paused: jboolean) {
+    if let Some(s) = session(h) {
+        s.control_v1_1(qr_proto::Msg::Pause { paused: paused != 0 });
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_quickremote_Native_text(mut env: JNIEnv, _c: JClass, h: jlong, text: JString) {
     if let (Some(s), Some(t)) = (session(h), string(&mut env, &text)) {

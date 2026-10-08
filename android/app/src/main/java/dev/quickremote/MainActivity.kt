@@ -71,7 +71,7 @@ class MainActivity : Activity() {
             try {
                 val h = Native.connect(filesDir.absolutePath, target, pin, android.os.Build.MODEL, null,
                     hardwareCodecs(), maxOf(dm.widthPixels, dm.heightPixels), minOf(dm.widthPixels, dm.heightPixels))
-                runOnUiThread { startActivity(Intent(this, SessionActivity::class.java).putExtra("handle", h)) ; status.text = "" }
+                runOnUiThread { startActivity(Intent(this, SessionActivity::class.java).putExtra("handle", h).putExtra("target", target)) ; status.text = "" }
             } catch (e: IllegalStateException) {
                 val msg = e.message ?: "Couldn't connect."
                 runOnUiThread {

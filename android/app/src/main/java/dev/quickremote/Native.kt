@@ -26,6 +26,9 @@ object Native {
     external fun pen(h: Long, x: Int, y: Int, pressure: Int, tiltX: Int, tiltY: Int, flags: Int)
     external fun pad(h: Long, idx: Int, buttons: Int, axes: ShortArray)
     external fun padDetach(h: Long, idx: Int)
+    /** target: 0 a virtual monitor of its own, 1 the real monitor. Ignored by hosts before protocol 1.1. */
+    external fun displayRequest(h: Long, w: Int, hgt: Int, hz: Int, scalePct: Int, target: Int)
+    external fun pause(h: Long, paused: Boolean)
     external fun clipboard(h: Long, text: String)
     external fun close(h: Long)
 }

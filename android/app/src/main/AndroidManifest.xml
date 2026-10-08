@@ -14,7 +14,9 @@
         android:banner="@drawable/banner"
         android:icon="@drawable/banner"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
-        <activity android:name=".MainActivity" android:exported="true">
+        <!-- Not recreated on rotation: a connection in progress would be lost. -->
+        <activity android:name=".MainActivity" android:exported="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -25,7 +27,7 @@
             android:name=".SessionActivity"
             android:exported="false"
             android:configChanges="orientation|screenSize|smallestScreenSize|density|keyboard|keyboardHidden|navigation|screenLayout|uiMode|touchscreen|layoutDirection|colorMode|fontScale"
-            android:screenOrientation="sensorLandscape"
-            android:windowSoftInputMode="adjustResize" />
+            android:screenOrientation="fullUser"
+            android:windowSoftInputMode="adjustResize|stateAlwaysHidden" />
     </application>
 </manifest>

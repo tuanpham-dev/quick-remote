@@ -128,12 +128,12 @@ Clients choose the remote desktop's size (follow window / fixed), sharpness (pix
 **Goal:** the same on Android.
 **Checkpoint:** `tests/e2e/android.sh` extended passes A12 (Android), A16.
 
-- [ ] **T14 — FFI**
+- [x] **T14 — FFI**
   - Files: `crates/qr-ffi/src/core.rs`, `crates/qr-ffi/src/lib.rs`, `android/app/src/main/java/dev/quickremote/Native.kt`
   - Do: `displayRequest(w,h,hz,scalePct,target)`, `pause(bool)`, `DisplayInfo` forwarded as an event JSON `{"t":"display",...}`; reconnect support (`connect` again with the stored identity).
   - Depends on: T4
   - Done when: `scripts/build-android.sh` builds.
-- [ ] **T15 — UI and gestures**
+- [x] **T15 — UI and gestures**
   - Files: `android/app/src/main/java/dev/quickremote/SessionActivity.kt`, `android/app/src/main/java/dev/quickremote/Settings.kt` (new)
   - Do: toolbar (Keyboard, Zoom %, Display dialog), SharedPreferences settings, follow-screen size with orientation, view transform (ScaleGestureDetector + pan), gestures per R18 (three-finger tap = middle, four-finger tap = keyboard, long press = right), extra-keys strip above the IME, reconnect overlay, `pause` in onPause/onResume.
   - Depends on: T14
