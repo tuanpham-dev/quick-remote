@@ -58,7 +58,7 @@ pub mod mutter {
         pub fn monitors(&self) -> Vec<Monitor> {
             match self.never {}
         }
-        pub fn node(&self, _monitor: u8) -> Option<u32> {
+        pub async fn stream(&self, _monitor: u8) -> Result<(Monitor, u32)> {
             match self.never {}
         }
         pub fn injector(&self) -> Result<MutterInput> {
@@ -118,7 +118,7 @@ pub mod kwin {
         pub fn monitors(&self) -> Vec<Monitor> {
             match self.never {}
         }
-        pub fn node(&self, _monitor: u8) -> Option<u32> {
+        pub fn stream(&self, _monitor: &Monitor) -> Result<u32> {
             match self.never {}
         }
         pub fn injector(&self) -> Result<super::mutter::MutterInput> {

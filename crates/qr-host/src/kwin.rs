@@ -11,8 +11,11 @@
 //! portal would ask the user to pick a screen, which a host started
 //! remotely can't answer.)
 
+use std::collections::HashMap;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -37,9 +40,12 @@ struct State {
     outputs: Vec<(wl_output::WlOutput, String)>,
     screencast: Option<ZkdeScreencastUnstableV1>,
     fake: Option<OrgKdeKwinFakeInput>,
-    /// Per requested stream: its node, or why it failed.
-    nodes: Vec<Option<Result<u32, String>>>,
+    /// Per requested stream: its node, or why it failed (shared with the
+    /// threads asking for streams).
+    nodes: Nodes,
 }
+
+type Nodes = Arc<Mutex<HashMap<usize, Option<Result<u32, String>>>>>;
 
 impl Dispatch<wl_registry::WlRegistry, ()> for State {
     fn event(
@@ -89,10 +95,18 @@ impl Dispatch<ZkdeScreencastStreamUnstableV1, usize> for State {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        let mut nodes = st.nodes.lock().unwrap();
         match ev {
-            stream::Event::Created { node } => st.nodes[*i] = Some(Ok(node)),
-            stream::Event::Failed { error } => st.nodes[*i] = Some(Err(error)),
-            stream::Event::Closed => tracing::warn!(stream = i, "KWin closed a screencast stream"),
+            stream::Event::Created { node } => {
+                nodes.insert(*i, Some(Ok(node)));
+            }
+            stream::Event::Failed { error } => {
+                nodes.insert(*i, Some(Err(error)));
+            }
+            stream::Event::Closed => {
+                nodes.remove(i);
+                tracing::debug!(stream = i, "KWin closed a screencast stream");
+            }
             _ => {}
         }
     }
@@ -170,18 +184,25 @@ fn authorize() -> Result<PathBuf> {
     Ok(path)
 }
 
-/// A running KWin session (keep it alive while streaming).
+/// A KWin session: screencast streams on demand, fake input.
 pub struct KwinSession {
     pub socket: PathBuf,
-    streams: Vec<(Monitor, u32)>,
+    fps: u32,
     conn: Connection,
+    qh: QueueHandle<State>,
+    screencast: ZkdeScreencastUnstableV1,
+    outputs: Vec<(wl_output::WlOutput, String)>,
+    nodes: Nodes,
+    next: AtomicUsize,
+    /// Each monitor's current stream.
+    open: Mutex<HashMap<u8, ZkdeScreencastStreamUnstableV1>>,
     fake: Option<OrgKdeKwinFakeInput>,
 }
 
 impl KwinSession {
-    /// Streams every output of the desktop at `socket` to PipeWire.
+    /// Connects to the desktop at `socket` (streams start per monitor with
+    /// [`KwinSession::stream`]).
     pub fn start(socket: &Path, fps: u32) -> Result<Self> {
-        let monitors = crate::screencopy::monitors(socket, fps).context("listing KWin's outputs")?;
         let conn = Connection::from_socket(
             UnixStream::connect(socket).with_context(|| format!("connecting to {}", socket.display()))?,
         )?;
@@ -191,65 +212,76 @@ impl KwinSession {
         let mut st = State::default();
         q.roundtrip(&mut st)?;
         q.roundtrip(&mut st)?; // the outputs' names
-        let sc = st.screencast.clone().context(
+        let screencast = st.screencast.clone().context(
             "KWin doesn't offer its screencast to this program (install deploy/kde/quickremote-host.desktop)",
         )?;
-        let mut pending = Vec::new();
-        for m in monitors {
-            let Some((out, _)) = st.outputs.iter().find(|(_, n)| *n == m.name) else {
-                tracing::warn!(output = m.name, "no wl_output for this monitor");
-                continue;
-            };
-            let i = st.nodes.len();
-            st.nodes.push(None);
-            pending.push((m, sc.stream_output(out, POINTER_EMBEDDED, &qh, i), i));
-        }
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while st.nodes.iter().any(Option::is_none) {
-            if Instant::now() > deadline {
-                bail!("KWin started no PipeWire stream");
-            }
-            q.roundtrip(&mut st)?;
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        let mut streams = Vec::new();
-        let mut keep = Vec::new();
-        for (m, s, i) in pending {
-            match st.nodes[i].take() {
-                Some(Ok(node)) => {
-                    streams.push((m, node));
-                    keep.push(s);
-                }
-                Some(Err(e)) => tracing::warn!(output = m.name, "KWin screencast failed: {e}"),
-                None => {}
-            }
-        }
-        if streams.is_empty() {
-            bail!("KWin streamed no output");
-        }
         let fake = st.fake.clone();
         match &fake {
             Some(f) => f.authenticate("QuickRemote".into(), "Remote control from a QuickRemote client".into()),
             None => tracing::warn!("KWin doesn't offer fake input to this program: no remote input"),
         }
         conn.flush()?;
-        tracing::info!(monitors = ?streams.iter().map(|(m, n)| (&m.name, n)).collect::<Vec<_>>(), "KWin session");
-        // Keep reading events (KWin drops clients that stop) and the
-        // streams alive.
+        let (outputs, nodes) = (st.outputs.clone(), st.nodes.clone());
+        // Keep reading events (KWin drops clients that stop).
         std::thread::Builder::new().name("qr-kwin".into()).spawn(move || {
-            let _streams = keep;
             while q.blocking_dispatch(&mut st).is_ok() {}
             tracing::warn!("the KWin connection closed");
         })?;
-        Ok(Self { socket: socket.to_path_buf(), streams, conn, fake })
+        let me = Self {
+            socket: socket.to_path_buf(),
+            fps,
+            conn,
+            qh,
+            screencast,
+            outputs,
+            nodes,
+            next: AtomicUsize::new(0),
+            open: Mutex::default(),
+            fake,
+        };
+        tracing::info!(monitors = ?me.monitors().iter().map(|m| &m.name).collect::<Vec<_>>(), "KWin session");
+        Ok(me)
     }
 
+    /// The outputs as they are now.
     pub fn monitors(&self) -> Vec<Monitor> {
-        self.streams.iter().map(|(m, _)| m.clone()).collect()
+        crate::screencopy::monitors(&self.socket, self.fps).unwrap_or_else(|e| {
+            tracing::warn!("listing KWin's outputs: {e:#}");
+            Vec::new()
+        })
     }
 
-    pub fn node(&self, monitor: u8) -> Option<u32> {
-        self.streams.iter().find(|(m, _)| m.id == monitor).map(|(_, n)| *n)
+    /// A new PipeWire stream of `monitor` at its current size (replacing
+    /// its previous one): its node. Blocks until KWin answers.
+    pub fn stream(&self, monitor: &Monitor) -> Result<u32> {
+        let (out, _) = self
+            .outputs
+            .iter()
+            .find(|(_, n)| *n == monitor.name)
+            .with_context(|| format!("KWin has no output {}", monitor.name))?;
+        if let Some(old) = self.open.lock().unwrap().remove(&monitor.id) {
+            old.close();
+        }
+        let i = self.next.fetch_add(1, Ordering::Relaxed);
+        self.nodes.lock().unwrap().insert(i, None);
+        let s = self.screencast.stream_output(out, POINTER_EMBEDDED, &self.qh, i);
+        self.conn.flush()?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let node = loop {
+            match self.nodes.lock().unwrap().get(&i) {
+                Some(Some(Ok(node))) => break *node,
+                Some(Some(Err(e))) => bail!("KWin's screencast of {} failed: {e}", monitor.name),
+                None => bail!("KWin closed the screencast of {}", monitor.name),
+                Some(None) => {}
+            }
+            if Instant::now() > deadline {
+                bail!("KWin started no PipeWire stream for {}", monitor.name);
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        self.open.lock().unwrap().insert(monitor.id, s);
+        tracing::debug!(output = monitor.name, node, "KWin screencast");
+        Ok(node)
     }
 
     pub fn injector(&self) -> Result<KwinInput> {
@@ -373,8 +405,10 @@ impl Injector for KwinInput {
     fn text(&mut self, text: &str) -> Result<()> {
         for c in text.chars() {
             let at = match &self.keymap {
-                Some(m) => m.read().unwrap().get(&keysym(c)).map(|&(kc, level)| (kc - 8, level)),
-                None => us_key(c),
+                Some(m) if !m.read().unwrap().is_empty() => {
+                    m.read().unwrap().get(&keysym(c)).map(|&(kc, level)| (kc - 8, level))
+                }
+                _ => us_key(c),
             };
             match at {
                 Some((code, level)) => self.tap(code, level),

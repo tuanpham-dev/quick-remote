@@ -143,6 +143,21 @@ impl Video {
             };
             opened = Some(o);
             s
+        } else if let Some(m) = &self.ctx.mutter {
+            // GNOME: the monitor's stream; recorded anew (at its current
+            // layout) after a capture of it ended.
+            drop(self.streams.lock().expect("lock").remove(&id));
+            let (now, node) = m.stream(mon.id).await?;
+            (w, h) = (now.width as u32, now.height as u32);
+            Source::PipeWire { fd: None, node }
+        } else if self.ctx.kwin.is_some() {
+            // KDE: a fresh screencast at the monitor's current size (a
+            // running PipeWire stream can't change size under pipewiresrc).
+            drop(self.streams.lock().expect("lock").remove(&id));
+            (w, h) = (mon.width as u32, mon.height as u32);
+            let (ctx, m) = (self.ctx.clone(), mon.clone());
+            let node = tokio::task::spawn_blocking(move || ctx.kwin.as_ref().expect("kwin").stream(&m)).await??;
+            Source::PipeWire { fd: None, node }
         } else {
             (w, h) = (mon.width as u32, mon.height as u32);
             self.ctx.source_for(&mon)

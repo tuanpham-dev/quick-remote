@@ -142,11 +142,41 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
     // Stats once a second.
     let stats_task = {
         let (video, tx, enc_name, conn2) = (video.clone(), control_tx.clone(), enc.element.to_string(), conn.clone());
+        let ctx = ctx.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_secs(1));
             tick.tick().await;
-            loop {
+            // Desktop captures restarted after failing, for a limit.
+            let mut restarts: std::collections::VecDeque<std::time::Instant> = Default::default();
+            'run: loop {
                 tick.tick().await;
+                for id in 0..crate::video::MAX_STREAMS {
+                    let Some(e) = video.stream(id).and_then(|s| s.encoder.error()) else { continue };
+                    // A desktop's PipeWire stream fails when its monitor
+                    // changes size (pipewiresrc can't renegotiate): a new
+                    // capture picks up the new size.
+                    restarts.retain(|t| t.elapsed() < Duration::from_secs(60));
+                    let desktop = ctx.kwin.is_some() || ctx.mutter.is_some();
+                    if desktop
+                        && restarts.len() < 5
+                        && let Some((monitor, (_, _, fps))) = video.current(id)
+                    {
+                        restarts.push_back(std::time::Instant::now());
+                        tracing::warn!(stream = id, "capture failed ({e}); restarting it");
+                        match video.start(id, monitor, (0, 0, fps)).await {
+                            Ok(()) => continue,
+                            Err(e) => tracing::warn!(stream = id, "restarting the capture: {e:#}"),
+                        }
+                    }
+                    if id != 0 {
+                        tracing::warn!(stream = id, "capture/encode failed: {e}; stopping this stream");
+                        video.stop(id).await;
+                        continue;
+                    }
+                    tracing::error!("capture/encode failed: {e}");
+                    let _ = send(&tx, &Msg::Error { code: ErrorCode::CaptureFailed as u16, text: e }).await;
+                    break 'run;
+                }
                 let Some(stream) = video.stream(0) else { continue };
                 let c = &stream.counters;
                 let frames = c.frames_sent.swap(0, Ordering::Relaxed).max(1);
@@ -173,11 +203,6 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
                     datagrams = qs.frame_tx.datagram,
                     "quic stats"
                 );
-                if let Some(e) = stream.encoder.error() {
-                    tracing::error!("capture/encode failed: {e}");
-                    let _ = send(&tx, &Msg::Error { code: ErrorCode::CaptureFailed as u16, text: e }).await;
-                    break;
-                }
                 if send(&tx, &Msg::HostStats(m)).await.is_err() {
                     break;
                 }
@@ -430,10 +455,6 @@ impl HostCtx {
             && let Some(w) = qr_win::monitors::monitors().get(mon.id as usize)
         {
             return Source::D3d11Handle { handle: w.handle };
-        }
-        let node = self.mutter.as_ref().and_then(|m| m.node(mon.id));
-        if let Some(node) = node.or_else(|| self.kwin.as_ref().and_then(|k| k.node(mon.id))) {
-            return Source::PipeWire { fd: None, node };
         }
         match self.source() {
             // One monitor of several: its rectangle of the screen.

@@ -137,12 +137,18 @@ pub fn watch(socket: &Path) -> Result<Keysyms> {
     let _registry = conn.display().get_registry(&qh, ());
     let syms = Keysyms::default();
     let mut st = State { seat: None, keyboard: None, syms: syms.clone() };
-    // Globals, then the seat's capabilities, then the keymap.
-    for _ in 0..3 {
+    // Globals, then the seat's capabilities, then the keymap (a desktop
+    // just started may take a moment; it arrives later through the thread
+    // otherwise, and an empty map means unknown meanwhile).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while st.syms.read().unwrap().is_empty() && std::time::Instant::now() < deadline {
         q.roundtrip(&mut st)?;
+        if st.syms.read().unwrap().is_empty() {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
     }
     if st.syms.read().unwrap().is_empty() {
-        bail!("the desktop sent no keymap");
+        tracing::debug!("no keymap from the desktop yet");
     }
     std::thread::Builder::new().name("qr-keymap".into()).spawn(move || {
         let _conn = conn;

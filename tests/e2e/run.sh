@@ -24,10 +24,12 @@ phase1)
 	run lan a19_a20_a23
 	run lan a15_x11
 	run lan a15_wayland
+	run lan gnome_resize
 	run lan a15_wlroots
 	run lan a15_kde
 	run lan kde_fps
 	run lan kde_clip
+	run lan kde_resize
 	run lan web_rotate
 	[[ -f "$here/a10_a11.sh" ]] && run wan a10_a11
 	# Virtual display (ENV-BLOCKED without the render group).
