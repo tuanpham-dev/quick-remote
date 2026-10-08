@@ -27,6 +27,12 @@ button 1 up
 sleep 200
 tap 16
 text héllo 漢字
+sleep 100
+key 42 down
+tap 8
+tap 16
+key 42 up
+tap 16
 sleep 300
 abs 100 100 1
 sleep 200
@@ -47,7 +53,7 @@ print(f"click={clicks[:1]} q={i is not None} typed={typed!r} last_motion={moves[
 EOF
 cat "$LOGDIR/vd_input-summary.txt"
 s() { grep -q "$1" "$LOGDIR/vd_input-summary.txt"; }
-check A19-vd "the Q key and text \"héllo 漢字\" arrive in a GTK app on the virtual display ($(cut -d' ' -f3- "$LOGDIR/vd_input-summary.txt" | cut -d' ' -f1-3))" \
-	bash -c "grep -q \"q=True typed='héllo 漢字'\" '$LOGDIR/vd_input-summary.txt'"
+check A19-vd "the Q key, text \"héllo 漢字\" and Shift+7, Shift+Q, Q (\"&Qq\") arrive in a GTK app on the virtual display ($(cut -d' ' -f3- "$LOGDIR/vd_input-summary.txt" | cut -d' ' -f1-3))" \
+	bash -c "grep -q \"q=True typed='héllo 漢字&Qq'\" '$LOGDIR/vd_input-summary.txt'"
 check A20-vd "1000 relative +1 steps from (100, 100) end at (1100, 100) on the second monitor" s 'last_motion=(1100, 100)'
 check A16-input "a click at (200, 150) in the second stream lands there on the second monitor" s 'click=\[(200, 150)\]'

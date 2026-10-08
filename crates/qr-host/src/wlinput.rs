@@ -169,8 +169,78 @@ pub struct WlInput {
     keyboard: ZwpVirtualKeyboardV1,
     /// The normal keymap, restored after text.
     keymap: String,
+    /// The keyboard's modifier state, which a virtual keyboard has to send
+    /// itself (else Shift+7 types 7): libxkbcommon tracks it on the normal
+    /// keymap. None when libxkbcommon is missing.
+    xkb: Option<XkbState>,
     t0: Instant,
     _conn: Connection,
+}
+
+/// libxkbcommon's key state for a keymap.
+struct XkbState {
+    state: *mut xkbcommon_dl::xkb_state,
+    /// (depressed, latched, locked, group) last sent.
+    sent: (u32, u32, u32, u32),
+}
+
+impl XkbState {
+    fn new(keymap: &str) -> Option<Self> {
+        use xkbcommon_dl::{xkb_context_flags, xkb_keymap_compile_flags, xkb_keymap_format};
+        let x = xkbcommon_dl::xkbcommon_option()?;
+        let text = std::ffi::CString::new(keymap).ok()?;
+        // SAFETY: libxkbcommon calls as documented; the state keeps its own
+        // references to the keymap and context.
+        unsafe {
+            let ctx = (x.xkb_context_new)(xkb_context_flags::XKB_CONTEXT_NO_FLAGS);
+            if ctx.is_null() {
+                return None;
+            }
+            let km = (x.xkb_keymap_new_from_string)(
+                ctx,
+                text.as_ptr(),
+                xkb_keymap_format::XKB_KEYMAP_FORMAT_TEXT_V1,
+                xkb_keymap_compile_flags::XKB_KEYMAP_COMPILE_NO_FLAGS,
+            );
+            (x.xkb_context_unref)(ctx);
+            if km.is_null() {
+                return None;
+            }
+            let state = (x.xkb_state_new)(km);
+            (x.xkb_keymap_unref)(km);
+            (!state.is_null()).then_some(Self { state, sent: (0, 0, 0, 0) })
+        }
+    }
+
+    /// Applies an evdev key change: the new modifiers when they changed.
+    fn key(&mut self, code: u16, down: bool) -> Option<(u32, u32, u32, u32)> {
+        use xkbcommon_dl::{xkb_key_direction, xkb_state_component as C};
+        let x = xkbcommon_dl::xkbcommon_option()?;
+        let dir = if down { xkb_key_direction::XKB_KEY_DOWN } else { xkb_key_direction::XKB_KEY_UP };
+        // SAFETY: a live state; XKB keycodes are evdev + 8.
+        let now = unsafe {
+            (x.xkb_state_update_key)(self.state, code as u32 + 8, dir);
+            (
+                (x.xkb_state_serialize_mods)(self.state, C::XKB_STATE_MODS_DEPRESSED),
+                (x.xkb_state_serialize_mods)(self.state, C::XKB_STATE_MODS_LATCHED),
+                (x.xkb_state_serialize_mods)(self.state, C::XKB_STATE_MODS_LOCKED),
+                (x.xkb_state_serialize_layout)(self.state, C::XKB_STATE_LAYOUT_EFFECTIVE),
+            )
+        };
+        (now != self.sent).then(|| {
+            self.sent = now;
+            now
+        })
+    }
+}
+
+impl Drop for XkbState {
+    fn drop(&mut self) {
+        if let Some(x) = xkbcommon_dl::xkbcommon_option() {
+            // SAFETY: our own reference.
+            unsafe { (x.xkb_state_unref)(self.state) };
+        }
+    }
 }
 
 // SAFETY: the Wayland objects are only used through `&mut self`.
@@ -199,7 +269,11 @@ impl WlInput {
         queue.roundtrip(&mut state)?;
         let outputs: Vec<_> = state.outputs.iter().map(|o| (o.x, o.y, o.w, o.h)).collect();
         tracing::info!(?outputs, "virtual input ready");
-        Ok(Self { queue, state, pointer, keyboard, keymap, t0: Instant::now(), _conn: conn })
+        let xkb = XkbState::new(&keymap);
+        if xkb.is_none() {
+            tracing::warn!("no keyboard state (libxkbcommon): Shift and other modifiers won't apply");
+        }
+        Ok(Self { queue, state, pointer, keyboard, keymap, xkb, t0: Instant::now(), _conn: conn })
     }
 
     fn time(&self) -> u32 {
@@ -238,6 +312,9 @@ impl Injector for WlInput {
     fn key(&mut self, code: u16, down: bool) -> Result<()> {
         let t = self.time();
         self.keyboard.key(t, code as u32, down as u32);
+        if let Some((depressed, latched, locked, group)) = self.xkb.as_mut().and_then(|x| x.key(code, down)) {
+            self.keyboard.modifiers(depressed, latched, locked, group);
+        }
         self.flush()
     }
 
@@ -302,6 +379,8 @@ impl Injector for WlInput {
         // Newline and tab as their own keysyms (Return, Tab), not U000A.
         let keymap = text_keymap(&chars).replace("U000A", "Return").replace("U0009", "Tab");
         self.set_keymap(&keymap)?;
+        // Held modifiers would change what the text keys type.
+        self.keyboard.modifiers(0, 0, 0, 0);
         for c in text.chars() {
             let Ok(i) = chars.binary_search(&c) else { continue };
             let t = self.time();
@@ -310,6 +389,9 @@ impl Injector for WlInput {
         }
         let normal = self.keymap.clone();
         self.set_keymap(&normal)?;
+        if let Some((depressed, latched, locked, group)) = self.xkb.as_ref().map(|x| x.sent) {
+            self.keyboard.modifiers(depressed, latched, locked, group);
+        }
         self.flush()
     }
 
