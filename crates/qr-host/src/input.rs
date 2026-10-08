@@ -88,6 +88,8 @@ pub mod xtest {
         /// Which character each spare currently types.
         lent: Vec<Option<char>>,
         next_spare: usize,
+        /// When a spare was last remapped.
+        last_lend: Option<std::time::Instant>,
         wheel_acc: (i32, i32),
     }
 
@@ -99,16 +101,8 @@ pub mod xtest {
                 .context("the X server has no XTEST extension")?;
             let root = conn.setup().roots[screen].root;
             let spares = find_spares(&conn, 16).unwrap_or_default();
-            // Some clients (Xlib with XKB) lose the first keymap change they
-            // see after starting; make that a harmless one now, not the
-            // first borrowed character (measured with xev: the first
-            // borrowed character was dropped in about half the runs).
-            if let Some(&kc) = spares.first() {
-                conn.change_keyboard_mapping(1, kc, 2, &[0, 0])?;
-                conn.get_input_focus()?.reply()?;
-            }
             let lent = vec![None; spares.len()];
-            Ok(Self { conn, root, spares, lent, next_spare: 0, wheel_acc: (0, 0) })
+            Ok(Self { conn, root, spares, lent, next_spare: 0, last_lend: None, wheel_acc: (0, 0) })
         }
 
         fn fake(&self, kind: u8, detail: u8, x: i16, y: i16) -> Result<()> {
@@ -228,6 +222,19 @@ pub mod xtest {
                             }
                             let i = self.next_spare;
                             self.next_spare = (i + 1) % self.spares.len();
+                            // Some clients (Xlib with XKB) miss the first
+                            // keymap change after loading their keymap,
+                            // which they do lazily at their first key: lose
+                            // a throwaway change first when one may not have
+                            // been seen (xev dropped the first borrowed
+                            // character in about a third of the runs).
+                            let stale = self.last_lend.is_none_or(|t| t.elapsed() > std::time::Duration::from_secs(1));
+                            if stale {
+                                self.conn.change_keyboard_mapping(1, self.spares[i], 2, &[sym, 0])?;
+                                self.conn.get_input_focus()?.reply()?;
+                                std::thread::sleep(std::time::Duration::from_millis(20));
+                            }
+                            self.last_lend = Some(std::time::Instant::now());
                             // Both levels, so a held Shift doesn't matter.
                             self.conn.change_keyboard_mapping(1, self.spares[i], 2, &[sym, sym])?;
                             self.conn.get_input_focus()?.reply()?;

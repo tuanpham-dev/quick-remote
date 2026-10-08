@@ -21,6 +21,7 @@ phase1)
 	run lan a1_a2
 	[[ -f "$here/a6.sh" ]] && run lan a6
 	run lan a7
+	run lan a19_a20_a23
 	run lan a15_x11
 	run lan a15_wayland
 	run lan a15_wlroots
