@@ -29,6 +29,14 @@ the groups:
 sudo usermod -aG render,input $USER   # then log out and back in
 ```
 
+After logging back in, clear GStreamer's plugin cache once. It still holds the
+scan from when the GPU wasn't accessible, and keeps hiding the GPU encoder
+until cleared:
+
+```
+rm -rf ~/.cache/gstreamer-1.0
+```
+
 Check that the GPU encoder is found:
 
 ```
