@@ -248,6 +248,23 @@ try {
   check("A10", `after a host restart the page reconnects in ${((Date.now() - r0) / 1000).toFixed(1)} s (${s.reconnects} attempts), no PIN asked (${!pinShown})`,
     s.connected && s.reconnects > 0 && !pinShown && Date.now() - r0 <= 12000);
 
+  // A10b: the same browser opens the desktop in a second tab: that tab takes
+  // over, and this one stops and says why instead of taking it back (the two
+  // used to replace each other every second).
+  const reconnectsBefore = s.reconnects;
+  const here = await page.eval("location.href");
+  const tab = await page.send("Target.createTarget", { url: here });
+  await sleep(8000);
+  const t = await st();
+  const note = await page.eval("document.getElementById('banner').hidden ? '' : document.getElementById('banner').textContent");
+  await page.send("Target.closeTarget", { targetId: tab.targetId }).catch(() => {});
+  check("A10b", `a second tab takes over; this one stops (${t.reconnects - reconnectsBefore} reconnects, connected ${t.connected}) and says "${note}"`,
+    !t.connected && t.reconnects === reconnectsBefore && /another tab/.test(note));
+  // A reload takes it back (and the checks below need this page connected).
+  // (A reload, not a navigation: the same URL with a fragment wouldn't load.)
+  await page.send("Page.reload", {});
+  await page.waitFor("window.qrStats && window.qrStats.connected && window.qrStats.decoded > 2", 20000).catch(() => {});
+
   // A21: a desktop that keeps its own size (X11).
   host.kill("SIGTERM");
   await sleep(1000);

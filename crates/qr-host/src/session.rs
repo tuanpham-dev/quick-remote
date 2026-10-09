@@ -42,7 +42,12 @@ pub fn path_class(conn: &quinn::Connection, web: &crate::web::WebPeers) -> Profi
     if lan { Profile::Lan } else { Profile::Internet }
 }
 
-pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) -> Result<()> {
+pub async fn run(
+    ctx: Arc<HostCtx>,
+    conn: quinn::Connection,
+    hs: HostSession,
+    kicked: tokio::sync::oneshot::Receiver<()>,
+) -> Result<()> {
     let HostSession { control_tx, mut control_rx, hello, client_name, client_fp, .. } = hs;
     // Who this is, for what outlives the session (a virtual monitor).
     let client_key = qr_net::identity::hex(&client_fp);
@@ -234,9 +239,17 @@ pub async fn run(ctx: Arc<HostCtx>, conn: quinn::Connection, hs: HostSession) ->
             }
         })
     };
-    let result =
-        control_loop(&ctx, &client_key, limit, &conn, &mut control_rx, &control_tx, &video, &files, &ctl, clipboard.as_ref(), &heard)
-            .await;
+    let result = tokio::select! {
+        r = control_loop(&ctx, &client_key, limit, &conn, &mut control_rx, &control_tx, &video, &files, &ctl, clipboard.as_ref(), &heard) => r,
+        Ok(()) = kicked => {
+            // The same client connected again (another tab or window).
+            let text = "This desktop was opened in another tab or window.".to_string();
+            let _ = send(&control_tx, &Msg::Error { code: ErrorCode::Replaced as u16, text }).await;
+            let _ = control_tx.lock().await.0.finish();
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            Err(anyhow::anyhow!("replaced by the same client"))
+        }
+    };
     // A virtual monitor of this client's stays for a reconnect, then goes.
     ctx.displays.release(&ctx, &client_key);
     watchdog.abort();

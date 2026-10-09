@@ -127,6 +127,9 @@ pub enum ErrorCode {
     CaptureFailed = 7,
     Internal = 8,
     NotPaired = 9,
+    /// The same client connected again (another tab or window): this
+    /// session ends, and must not reconnect and take it back.
+    Replaced = 10,
 }
 
 impl ErrorCode {
@@ -140,6 +143,7 @@ impl ErrorCode {
             6 => Self::Busy,
             7 => Self::CaptureFailed,
             9 => Self::NotPaired,
+            10 => Self::Replaced,
             _ => Self::Internal,
         }
     }

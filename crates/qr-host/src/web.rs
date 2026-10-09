@@ -382,6 +382,9 @@ async fn session(gw: Arc<Gateway>, wt: wtransport::Connection) -> Result<()> {
 
     let r = pipe(&wt, &host, &gw.peers, local_port).await;
     gw.peers.0.lock().expect("lock").remove(&local_port);
+    // The host's last words (an error saying why it ended) may still be on
+    // their way to the browser: closing now would drop them.
+    tokio::time::sleep(Duration::from_millis(300)).await;
     // Pass on why the host ended it: a page whose session another viewer
     // took over ("replaced") must not reconnect and take it back.
     let replaced = matches!(host.close_reason(), Some(quinn::ConnectionError::ApplicationClosed(c)) if &c.reason[..] == b"replaced");

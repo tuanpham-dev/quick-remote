@@ -166,6 +166,8 @@ struct Active {
     client: qr_net::Fingerprint,
     conn: quinn::Connection,
     done: tokio::sync::watch::Receiver<()>,
+    /// Tells the session it was replaced, so it says so before closing.
+    kick: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 pub struct HostCtx {
@@ -558,13 +560,22 @@ async fn main() -> Result<()> {
             // (after a network drop or a restart) replaces its old session.
             let done = {
                 let mut a = active.lock().await;
-                if let Some(old) = a.as_ref() {
+                if let Some(old) = a.as_mut() {
                     if old.client == hs.client_fp {
                         tracing::info!(%peer, "client reconnected; closing its previous session");
-                        old.conn.close(1u32.into(), b"replaced");
+                        // The old session tells its client (it may be another
+                        // tab still open) and ends; the connection closes
+                        // after it, or after a second regardless.
+                        let conn_old = old.conn.clone();
+                        if let Some(k) = old.kick.take() {
+                            let _ = k.send(());
+                        }
                         let mut d = old.done.clone();
                         drop(a);
-                        let _ = tokio::time::timeout(std::time::Duration::from_secs(3), d.changed()).await;
+                        if tokio::time::timeout(std::time::Duration::from_secs(1), d.changed()).await.is_err() {
+                            conn_old.close(1u32.into(), b"replaced");
+                            let _ = tokio::time::timeout(std::time::Duration::from_secs(2), d.changed()).await;
+                        }
                         a = active.lock().await;
                     } else {
                         let text = "Another client is connected to this host.".to_string();
@@ -575,10 +586,12 @@ async fn main() -> Result<()> {
                     }
                 }
                 let (tx, rx) = tokio::sync::watch::channel(());
-                *a = Some(Active { client: hs.client_fp, conn: conn.clone(), done: rx });
-                tx
+                let (kick, kicked) = tokio::sync::oneshot::channel();
+                *a = Some(Active { client: hs.client_fp, conn: conn.clone(), done: rx, kick: Some(kick) });
+                (tx, kicked)
             };
-            if let Err(e) = session::run(ctx, conn.clone(), hs).await {
+            let (done, kicked) = done;
+            if let Err(e) = session::run(ctx, conn.clone(), hs, kicked).await {
                 tracing::info!(%peer, "session ended: {e:#}");
             }
             {

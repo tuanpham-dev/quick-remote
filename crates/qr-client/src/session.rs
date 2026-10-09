@@ -21,6 +21,10 @@ use qr_proto::msg::{Feedback, HostStats};
 use qr_proto::{ALPN, Codec, InputEvent, Msg, PROTO_MAJOR, PROTO_MINOR};
 use tokio::sync::Mutex as AsyncMutex;
 
+/// Prefix of an end reason meaning the host gave this session to the same
+/// client connecting elsewhere: no reconnecting.
+pub const REPLACED: &str = "replaced: ";
+
 /// What the overlay and `--stats-json` show, refreshed every second.
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct Stats {
@@ -609,8 +613,9 @@ pub async fn connect(id: &Identity, keystore: &Mutex<KeyStore>, o: ConnectOpts, 
                                 Some(DisplayState { kind, width, height, scale_pct, note });
                         }
                     }
-                    Ok(Msg::Error { text, .. }) => {
-                        let _ = end_tx.send(Some(text));
+                    Ok(Msg::Error { code, text }) => {
+                        let replaced = code == qr_proto::msg::ErrorCode::Replaced as u16;
+                        let _ = end_tx.send(Some(if replaced { format!("{REPLACED}{text}") } else { text }));
                         return;
                     }
                     Ok(_) => {}

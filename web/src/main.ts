@@ -170,7 +170,17 @@ class Session {
         act?.playEffect("dual-rumble", { duration: m.ms, strongMagnitude: m.strong / 65535, weakMagnitude: m.weak / 65535 }).catch(() => {});
         break;
       }
-      case "Error": stats.error = m.text; say(m.text); break;
+      case "Error":
+        stats.error = m.text;
+        say(m.text);
+        // Opened in another tab or window: leave it there (a reload here
+        // takes it back).
+        if (m.code === ERROR_REPLACED) {
+          this.quit = true;
+          banner.textContent = `${m.text} Reload this page to use it here.`;
+          banner.hidden = false;
+        }
+        break;
       default: break;
     }
   }
@@ -670,6 +680,9 @@ async function connect(pin: string | null, retried = false): Promise<void> {
     () => { s.end("Connection lost."); if (!s.quit) reconnect(); },
   );
 }
+
+/** ErrorCode.Replaced: the same browser connected again elsewhere. */
+const ERROR_REPLACED = 10;
 
 // Reconnecting: keep the last picture, try again after 1, 2, 4, 8, then
 // every 10 seconds (a paired browser needs no PIN).

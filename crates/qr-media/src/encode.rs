@@ -130,14 +130,17 @@ pub fn source_desc(s: &Source, w: u32, h: u32, fps: u32) -> String {
                 "pipewiresrc{fd} name=pwsrc path={node} always-copy=false do-timestamp=true keepalive-time=1000 ! video/x-raw{size}"
             )
         }
-        // Variable rate (frames come on damage); timestamped on push.
+        // Frames come on damage, timestamped on push, at most `fps` a
+        // second. The caps say `fps`, not "variable" (0/1): encoders budget
+        // each frame as bitrate ÷ rate, and with 0/1 they assume a default
+        // rate and overshoot the bitrate when frames come faster.
         Source::App { format } => format!(
             "appsrc name=src is-live=true do-timestamp=true format=time max-buffers=2 leaky-type=downstream \
-             caps=\"video/x-raw,format={format},width={w},height={h},framerate=0/1\""
+             caps=\"video/x-raw,format={format},width={w},height={h},framerate={fps}/1\""
         ),
         Source::DmaNv12 { modifier } => format!(
             "appsrc name=src is-live=true do-timestamp=true format=time max-buffers=2 leaky-type=downstream \
-             caps=\"video/x-raw(memory:DMABuf),format=DMA_DRM,drm-format=NV12:0x{modifier:016x},width={w},height={h},framerate=0/1\""
+             caps=\"video/x-raw(memory:DMABuf),format=DMA_DRM,drm-format=NV12:0x{modifier:016x},width={w},height={h},framerate={fps}/1\""
         ),
         Source::X11 { display, rect } => {
             let r = rect

@@ -1073,6 +1073,11 @@ impl ApplicationHandler<UserEvent> for App {
                     return;
                 }
                 tracing::info!("session lost: {reason}");
+                // Opened again elsewhere (another window): leave it there.
+                if let Some(text) = reason.strip_prefix(crate::session::REPLACED) {
+                    self.screen = Screen::Error(text.to_string());
+                    return;
+                }
                 match self.target.clone() {
                     Some(t) => self.start_reconnect(t),
                     None => self.screen = Screen::Error(reason),
