@@ -15,6 +15,7 @@ cargo build --release -p qr-host -p qr-client -p qr-relay
 cp target/release/qr-host target/release/qr-client target/release/qr-relay "$out/"
 cp deploy/kde/quickremote-host.desktop "$out/"
 cp -r deploy/systemd "$out/systemd"
+cp scripts/xfce-desktop.sh scripts/setup-intel-hevc.sh "$out/"
 if [ "${1:-}" != "--no-android" ]; then
 	echo "== Android"
 	scripts/build-android.sh

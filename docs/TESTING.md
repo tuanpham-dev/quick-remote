@@ -64,6 +64,14 @@ Variants worth trying:
   `./qr-host --source vdisplay --size 1920x1080 --fps 120`
   (`--source "vdisplay:<command>"` starts a program in it, for example a game or a
   terminal; with nothing given you get an empty sway desktop.)
+- A full XFCE desktop on that virtual display, which follows the client's
+  window size and pixel ratio:
+  `./qr-host --source "vdisplay:$PWD/xfce-desktop.sh"`.
+  Chrome started in it uses Vulkan, which gives WebGL on the GPU.
+- Hardware H.265 on Intel GPUs (sharper at the same bitrate):
+  `sudo ./setup-intel-hevc.sh` installs Intel's full media driver from
+  Debian's non-free component. Older GPUs, like UHD 630, encode at most
+  4096 pixels wide; larger requests are cut to that.
 - With the web client: `./qr-host --web-listen 0.0.0.0:9443`. It prints a
   `WEB-URL` to open in the browser.
 - On KDE, the first start writes `~/.local/share/applications/quickremote-host.desktop`
