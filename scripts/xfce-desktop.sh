@@ -3,9 +3,9 @@
 #   qr-host --source "vdisplay:/path/to/xfce-desktop.sh"
 #
 # XFCE runs on a rootful, fullscreen Xwayland inside the virtual display.
-# A watcher keeps the X screen at the display's pixel size and turns its
-# scale (the client's pixel ratio) into XFCE's UI scale, so resizing the
-# client window or changing the pixel ratio carries through.
+# A watcher keeps the X screen at the size of its window and XFCE's UI
+# scale in step with the display's, so resizing the client window or
+# changing the pixel ratio carries through.
 #
 # Chrome started in this session uses Vulkan: Chrome's OpenGL path crashes
 # its GPU process on rootful Xwayland (WebGL then reports "not supported").
@@ -33,32 +33,30 @@ fi
 
 export DISPLAY="$D" XDG_SESSION_TYPE=x11 XDG_CURRENT_DESKTOP=XFCE
 export PATH="$dir/bin:$PATH" XDG_DATA_DIRS="$dir/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
-export QR_SWAYSOCK="${SWAYSOCK:-}" QR_XFCE_LOG="$log"
+export SOCK="${SWAYSOCK:-}" LOGF="$log"
 unset WAYLAND_DISPLAY
 
-# Keeps the X screen at the output's pixel size; 2× becomes XFCE's window
-# scaling, other ratios its DPI.
+# Keeps the X screen at the size of the Xwayland window's buffer, and
+# XFCE's scale at the buffer scale.
 follow() {
-	local last="" w h scale mode
+	local last="" w h k mode
 	while sleep 0.5; do
-		read -r w h scale < <(SWAYSOCK=$QR_SWAYSOCK swaymsg -t get_outputs -r 2>/dev/null |
-			python3 -c 'import json,sys; o=json.load(sys.stdin)[0]; m=o["current_mode"]; print(m["width"], m["height"], o["scale"])')
-		[[ -z ${w:-} || "$w $h $scale" == "$last" ]] && continue
-		last="$w $h $scale"
+		# The Xwayland window's buffer: the desktop (logical) size times
+		# the integer scale sway gives Xwayland (the output scale rounded
+		# up; 1 below 1×, where sway shrinks the picture to fewer pixels).
+		read -r w h k < <(SWAYSOCK=$SOCK swaymsg -t get_outputs -r 2>/dev/null |
+			python3 -c 'import json,math,sys; o=json.load(sys.stdin)[0]; r=o["rect"]; k=max(1,math.ceil(o["scale"]-1e-6)); print(r["width"]*k, r["height"]*k, k)')
+		[[ -z ${w:-} || "$w $h $k" == "$last" ]] && continue
+		last="$w $h $k"
 		mode="${w}x${h}"
 		if ! xrandr | grep -q "^ *$mode "; then
 			xrandr --newmode "$mode" 0 "$w" 0 0 0 "$h" 0 0 0 2>/dev/null
 			xrandr --addmode XWAYLAND0 "$mode"
 		fi
 		xrandr --output XWAYLAND0 --mode "$mode"
-		if [[ $scale == 2* ]]; then
-			xfconf-query -c xsettings -p /Gdk/WindowScalingFactor -n -t int -s 2
-			xfconf-query -c xsettings -p /Xft/DPI -n -t int -s 96
-		else
-			xfconf-query -c xsettings -p /Gdk/WindowScalingFactor -n -t int -s 1
-			xfconf-query -c xsettings -p /Xft/DPI -n -t int -s "$(python3 -c "print(round(96*$scale))")"
-		fi
-		echo "$(date +%T) X screen $mode scale $scale" >>"$QR_XFCE_LOG"
+		xfconf-query -c xsettings -p /Gdk/WindowScalingFactor -n -t int -s "$k"
+		xfconf-query -c xsettings -p /Xft/DPI -n -t int -s 96
+		echo "$(date +%T) X screen $mode scale $k" >>"$LOGF"
 	done
 }
 
