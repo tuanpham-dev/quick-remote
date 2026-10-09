@@ -32,6 +32,27 @@ pub enum Target {
     Real,
 }
 
+/// The picture's bit budget: lower is smoother on a busy network, softer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Quality {
+    #[default]
+    High,
+    Medium,
+    Low,
+}
+
+impl Quality {
+    pub fn level(self) -> u8 {
+        use qr_proto::msg::quality;
+        match self {
+            Quality::High => quality::HIGH,
+            Quality::Medium => quality::MEDIUM,
+            Quality::Low => quality::LOW,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -43,6 +64,7 @@ pub struct Settings {
     pub ratio: f32,
     pub target: Target,
     pub view: ViewMode,
+    pub quality: Quality,
 }
 
 impl Default for Settings {
@@ -55,6 +77,7 @@ impl Default for Settings {
             ratio: 0.0,
             target: Target::Virtual,
             view: ViewMode::Fit,
+            quality: Quality::High,
         }
     }
 }

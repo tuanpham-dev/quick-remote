@@ -76,6 +76,7 @@ pub async fn run(path: &str, input: &Input, ctl: &qr_net::files::Control) -> Res
                     target: num(4).unwrap_or(0) as u8,
                 });
             }
+            "quality" => ctl(qr_proto::Msg::Quality { level: num(0)? as u8 }),
             "pause" => ctl(qr_proto::Msg::Pause { paused: true }),
             "resume" => ctl(qr_proto::Msg::Pause { paused: false }),
             "monitor" => {

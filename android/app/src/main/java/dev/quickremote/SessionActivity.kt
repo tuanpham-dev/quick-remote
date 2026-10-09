@@ -86,6 +86,7 @@ class SessionActivity : Activity(), SurfaceHolder.Callback {
         target = intent.getStringExtra("target")
         settings = Settings(this)
         view.mode = settings.view
+        if (h != 0L) Native.quality(h, settings.quality)
         surface = SurfaceView(this).apply { holder.addCallback(this@SessionActivity) }
         keyLayer = KeyLayer(this).apply { isFocusable = true; isFocusableInTouchMode = true }
         stage = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
@@ -289,6 +290,7 @@ class SessionActivity : Activity(), SurfaceHolder.Callback {
                     runOnUiThread {
                         if (isFinishing || isDestroyed) { Native.close(nh); return@runOnUiThread }
                         h = nh; reconnecting = false; displayKind = -1; lastRequest = null
+                        Native.quality(h, settings.quality)
                         banner.visibility = View.GONE
                         android.util.Log.i("QuickRemote", "reconnected after $attempt attempts")
                         if (surfaceReady) startMedia()
@@ -566,6 +568,9 @@ class SessionActivity : Activity(), SurfaceHolder.Callback {
         val tgt = group("Virtual monitor of its own", "The desktop's real monitor", checked = if (settings.real) 1 else 0)
         if (displayKind != KIND_KDE && displayKind != KIND_GNOME) for (i in 0 until tgt.childCount) tgt.getChildAt(i).isEnabled = false
 
+        heading("Quality")
+        val qual = group("High", "Medium", "Low (smoothest on a busy network)", checked = settings.quality.coerceIn(0, 2))
+
         heading("View")
         val vm = group("Fit", "Fill screen", "100%", checked = settings.view.ordinal)
 
@@ -591,7 +596,9 @@ class SessionActivity : Activity(), SurfaceHolder.Callback {
                 settings.real = tgt.index() == 1
                 settings.view = ViewMode.entries[vm.index().coerceAtLeast(0)]
                 settings.trackpad = touch.index() != 1
+                settings.quality = qual.index().coerceIn(0, 2)
                 settings.save()
+                if (h != 0L) Native.quality(h, settings.quality)
                 view.mode = settings.view
                 placePicture()
                 requestDisplay(true)

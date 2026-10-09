@@ -213,6 +213,14 @@ pub extern "system" fn Java_dev_quickremote_Native_displayRequest(
     }
 }
 
+/// The picture's bit budget: 0 high, 1 medium, 2 low.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_quickremote_Native_quality(_env: JNIEnv, _c: JClass, h: jlong, level: jint) {
+    if let Some(s) = session(h) {
+        s.control_v1_1(qr_proto::Msg::Quality { level: level.clamp(0, 2) as u8 });
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_quickremote_Native_pause(_env: JNIEnv, _c: JClass, h: jlong, paused: jboolean) {
     if let Some(s) = session(h) {

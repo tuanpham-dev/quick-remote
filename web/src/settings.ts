@@ -16,13 +16,15 @@ export interface Settings {
   /** KDE/GNOME: a virtual monitor of our own, or the real one. */
   target: "virtual" | "real";
   view: ViewMode;
+  /** The picture's bit budget: lower is smoother on a busy network, softer. */
+  quality: "high" | "medium" | "low";
 }
 
 export const PRESETS: [number, number][] = [[1280, 720], [1600, 900], [1920, 1080], [2560, 1440], [3840, 2160]];
 export const RATES = [30, 60, 120];
 
 const KEY = "quickremote.display";
-const DEFAULTS: Settings = { mode: "follow", fixedW: 1920, fixedH: 1080, hz: 60, ratio: "auto", target: "virtual", view: "fit" };
+const DEFAULTS: Settings = { mode: "follow", fixedW: 1920, fixedH: 1080, hz: 60, ratio: "auto", target: "virtual", view: "fit", quality: "high" };
 
 export function load(): Settings {
   try {

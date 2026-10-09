@@ -99,6 +99,16 @@ impl VideoStream {
         Ok(s)
     }
 
+    /// The client's quality level: caps the target, applied at once.
+    pub fn set_quality(&self, level: u8) {
+        let mut r = self.rate.lock().expect("lock");
+        r.set_quality(level);
+        self.encoder.set_bitrate(r.target_kbps);
+        self.encoder.set_max_fps(r.fps);
+        self.target_kbps.store(r.target_kbps, Ordering::Relaxed);
+        tracing::info!(level, kbps = r.target_kbps, fps = r.fps, "quality");
+    }
+
     /// Applies client feedback to the rate controller and the encoder.
     pub fn feedback(&self, fb: &Feedback) {
         let mut r = self.rate.lock().expect("lock");

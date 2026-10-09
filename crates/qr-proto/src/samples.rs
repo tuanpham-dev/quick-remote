@@ -143,6 +143,7 @@ pub fn msgs() -> Vec<(&'static str, Msg)> {
             },
         ),
         ("Pause", Msg::Pause { paused: true }),
+        ("Quality", Msg::Quality { level: 2 }),
     ]
 }
 

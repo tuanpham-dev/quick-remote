@@ -20,10 +20,12 @@ class Settings(ctx: Context) {
     var real: Boolean = p.getBoolean("real", false)
     var view: ViewMode = ViewMode.entries.getOrElse(p.getInt("view", 0)) { ViewMode.FIT }
     var trackpad: Boolean = p.getBoolean("trackpad", true)
+    /** The picture's bit budget: 0 high, 1 medium, 2 low. */
+    var quality: Int = p.getInt("quality", 0)
 
     fun save() {
         p.edit().putBoolean("follow", follow).putInt("fixedW", fixedW).putInt("fixedH", fixedH).putInt("hz", hz)
-            .putFloat("ratio", ratio).putBoolean("real", real).putInt("view", view.ordinal).putBoolean("trackpad", trackpad).apply()
+            .putFloat("ratio", ratio).putBoolean("real", real).putInt("view", view.ordinal).putBoolean("trackpad", trackpad).putInt("quality", quality).apply()
     }
 
     /** The pixel ratio in effect on a screen of `density`. */

@@ -122,6 +122,8 @@ pub struct App {
     /// Bumped on each change: only the latest pending request is sent.
     display_gen: u64,
     last_request: Option<qr_proto::Msg>,
+    /// The quality level last sent to this session's host.
+    sent_quality: Option<u8>,
     /// The session's first DisplayInfo has been answered.
     display_started: bool,
     custom_w: String,
@@ -185,6 +187,7 @@ pub fn run(cfg: Config) -> Result<()> {
         show_display: false,
         display_gen: 0,
         last_request: None,
+        sent_quality: None,
         display_started: false,
         custom_w: String::new(),
         custom_h: String::new(),
@@ -346,6 +349,18 @@ impl App {
         })
     }
 
+    /// Tells the host the picture quality wanted (protocol 1.1 hosts).
+    fn send_quality(&mut self) {
+        let level = self.settings.quality.level();
+        let Some(s) = &self.session else { return };
+        if s.host_minor < 1 || self.sent_quality == Some(level) {
+            return;
+        }
+        tracing::info!(level, "quality");
+        (s.ctl)(qr_proto::Msg::Quality { level });
+        self.sent_quality = Some(level);
+    }
+
     fn send_display(&mut self) {
         let Some(m) = self.display_request() else { return };
         if self.last_request.as_ref() == Some(&m) {
@@ -361,7 +376,7 @@ impl App {
     /// The Display menu (Ctrl+Alt+Shift+V): resolution, pixel ratio,
     /// monitor and view, as in the web client.
     fn display_menu(&mut self, ctx: &egui::Context, display: Option<&crate::session::DisplayState>) {
-        use crate::settings::{PRESETS, RATES, RATIOS, SizeMode, Target, ViewMode};
+        use crate::settings::{PRESETS, Quality, RATES, RATIOS, SizeMode, Target, ViewMode};
         use qr_proto::msg::display_kind;
         let mut s = self.settings.clone();
         let kind = display.map(|d| d.kind);
@@ -417,6 +432,15 @@ impl App {
                 ui.radio_value(&mut s.target, Target::Real, "The desktop's real monitor");
             }
             ui.separator();
+            ui.label(egui::RichText::new("Quality").small().weak());
+            ui.horizontal(|ui| {
+                ui.radio_value(&mut s.quality, Quality::High, "High");
+                ui.radio_value(&mut s.quality, Quality::Medium, "Medium");
+                ui.radio_value(&mut s.quality, Quality::Low, "Low");
+            })
+            .response
+            .on_hover_text("Lower uses less bandwidth: smoother on a busy network, softer detail");
+            ui.separator();
             ui.label(egui::RichText::new("View").small().weak());
             ui.horizontal(|ui| {
                 ui.radio_value(&mut s.view, ViewMode::Fit, "Fit");
@@ -440,6 +464,7 @@ impl App {
         self.settings.save(&self.cfg.config_dir);
         self.layout_view();
         self.send_display();
+        self.send_quality();
     }
 
     fn hotkey(&mut self, k: KeyCode, el: &ActiveEventLoop) -> bool {
@@ -1028,6 +1053,8 @@ impl ApplicationHandler<UserEvent> for App {
                 self.session = Some(c);
                 self.screen = Screen::Session;
                 self.last_request = None;
+                self.sent_quality = None;
+                self.send_quality();
                 self.display_started = false;
                 self.update_title();
             }

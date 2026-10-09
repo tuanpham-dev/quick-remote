@@ -330,6 +330,11 @@ pub enum Msg {
     Pause {
         paused: bool,
     },
+    /// Client → host (protocol 1.1+; hosts that predate it ignore it): how
+    /// many bits the picture may use. See [`quality`].
+    Quality {
+        level: u8,
+    },
     /// A message type this build doesn't know (from a newer peer): ignored.
     Unknown(u8),
 }
@@ -350,6 +355,14 @@ pub mod display_kind {
 pub mod display_target {
     pub const VIRTUAL: u8 = 0;
     pub const REAL: u8 = 1;
+}
+
+/// `Quality.level`: the picture's bit budget. Lower levels use less of the
+/// link: smoother on a busy or weak network, softer in detail.
+pub mod quality {
+    pub const HIGH: u8 = 0;
+    pub const MEDIUM: u8 = 1;
+    pub const LOW: u8 = 2;
 }
 
 mod tag {
@@ -383,6 +396,7 @@ mod tag {
     pub const DISPLAY_REQUEST: u8 = 28;
     pub const DISPLAY_INFO: u8 = 29;
     pub const PAUSE: u8 = 30;
+    pub const QUALITY: u8 = 31;
 }
 
 fn put_cap(w: &mut Writer, c: &CodecCap) {
@@ -520,6 +534,9 @@ impl Msg {
             Msg::DisplayInfo { stream, kind, width, height, scale_pct, note } => {
                 w.u8(tag::DISPLAY_INFO).u8(*stream).u8(*kind).u16(*width).u16(*height).u16(*scale_pct).str(note);
             }
+            Msg::Quality { level } => {
+                w.u8(tag::QUALITY).u8(*level);
+            }
             Msg::Pause { paused } => {
                 w.u8(tag::PAUSE).bool(*paused);
             }
@@ -634,6 +651,7 @@ impl Msg {
                 note: r.str()?,
             },
             tag::PAUSE => Msg::Pause { paused: r.bool()? },
+            tag::QUALITY => Msg::Quality { level: r.u8()? },
             // From a newer peer: skip it whole.
             t => {
                 r.rest();

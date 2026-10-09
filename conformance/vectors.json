@@ -29,6 +29,7 @@
   {"name": "DisplayRequest", "kind": "msg", "hex": "1c00f00a08073c00c80000"},
   {"name": "DisplayInfo", "kind": "msg", "hex": "1d00028007380464002a00000032383030c397313830302069736e277420617661696c61626c65206f6e2074686973206d6f6e69746f72"},
   {"name": "Pause", "kind": "msg", "hex": "1e01"},
+  {"name": "Quality", "kind": "msg", "hex": "1f02"},
   {"name": "Key", "kind": "input", "hex": "011e0001"},
   {"name": "Button", "kind": "input", "hex": "020300"},
   {"name": "Abs", "kind": "input", "hex": "03007f070000"},

@@ -49,6 +49,9 @@ pub struct Video {
     resize_gen: AtomicU32,
     /// The client asked for no video (it is hidden).
     paused: AtomicBool,
+    /// The client's quality level (`qr_proto::msg::quality`), for every
+    /// stream and every restart.
+    quality: std::sync::atomic::AtomicU8,
     /// Desktop scale per stream, percent (100 = none), for input mapping.
     scale_pct: Mutex<BTreeMap<u8, u16>>,
     /// A stream about to read a node whose monitor isn't laid out yet (a
@@ -79,6 +82,7 @@ impl Video {
             restart: Default::default(),
             resize_gen: Default::default(),
             paused: Default::default(),
+            quality: Default::default(),
             scale_pct: Default::default(),
             pending: Default::default(),
         }
@@ -100,6 +104,15 @@ impl Video {
     }
 
     /// Stops (true) or resumes (false) all video; resuming sends keyframes.
+    /// The client's quality level, applied to every stream now and to
+    /// streams started later.
+    pub fn set_quality(&self, level: u8) {
+        self.quality.store(level, Ordering::Relaxed);
+        for s in self.all() {
+            s.set_quality(level);
+        }
+    }
+
     pub fn pause(&self, on: bool) {
         self.paused.store(on, Ordering::Relaxed);
         for s in self.all() {
@@ -242,6 +255,7 @@ impl Video {
         let limits = Limits { width: w, height: h, max_fps: fps, min_kbps: 300, max_kbps: self.ctx.args.max_kbps };
         let mut rate = RateCtl::new(limits, Instant::now());
         rate.grace(Instant::now());
+        rate.set_quality(self.quality.load(Ordering::Relaxed));
         if self.ctx.args.bitrate > 0 {
             rate.target_kbps = self.ctx.args.bitrate;
         }

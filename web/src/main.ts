@@ -3,7 +3,7 @@
 import { authenticate, CertChanged, PinNeeded, wasm } from "./auth.ts";
 import { EVDEV } from "./keymap.ts";
 import {
-  ClipKind, Codec, DisplayKind, DisplayTarget, Kind, Mode, PROTO_MAJOR, PROTO_MINOR, decodeAudio, decodeMsg, encodeInput,
+  ClipKind, Codec, DisplayKind, DisplayTarget, Kind, QualityLevel, Mode, PROTO_MAJOR, PROTO_MINOR, decodeAudio, decodeMsg, encodeInput,
   encodeMotion, encodeMsg, encodePad, type CodecCap, type InputEvent, type Msg,
 } from "./proto.ts";
 import * as cfg from "./settings.ts";
@@ -128,6 +128,7 @@ class Session {
       case "HelloAck":
         say(`Connected to ${m.name}`);
         this.hostMinor = m.minor;
+        sendQuality();
         break;
       case "DisplayInfo": onDisplayInfo(m); break;
       case "SessionStart":
@@ -735,6 +736,14 @@ function wanted(): { width: number; height: number; refresh: number; scalePct: n
   };
 }
 
+/** Tells the host the picture quality wanted (hosts before 1.1 don't know it). */
+function sendQuality(): void {
+  const s = session;
+  if (!s || s.closed || s.hostMinor < 1) return;
+  const level = { high: QualityLevel.HIGH, medium: QualityLevel.MEDIUM, low: QualityLevel.LOW }[settings.quality];
+  void s.send({ t: "Quality", level });
+}
+
 /** Asks the host for the display we want, 300 ms after the last change. */
 function requestDisplay(now = false): void {
   if (requestTimer !== undefined) clearTimeout(requestTimer);
@@ -773,6 +782,7 @@ function showSettings(): void {
   set("mode", settings.mode);
   set("target", settings.target);
   set("view", settings.view);
+  set("quality", settings.quality);
   const key = `${settings.fixedW}x${settings.fixedH}`;
   preset.value = cfg.PRESETS.some(([w, h]) => `${w}x${h}` === key) ? key : "custom";
   hzSel.value = String(settings.hz);
@@ -804,6 +814,7 @@ displayForm.addEventListener("change", (e) => {
   if (t.name === "mode") applySettings({ mode: t.value as cfg.Settings["mode"] });
   else if (t.name === "target") applySettings({ target: t.value as cfg.Settings["target"] });
   else if (t.name === "view") applySettings({ view: t.value as cfg.ViewMode });
+  else if (t.name === "quality") { applySettings({ quality: t.value as cfg.Settings["quality"] }); sendQuality(); }
   else if (t === preset as unknown as HTMLInputElement && preset.value !== "custom") {
     const [w, h] = preset.value.split("x").map(Number);
     applySettings({ mode: "fixed", fixedW: w, fixedH: h });

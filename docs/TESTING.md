@@ -124,6 +124,10 @@ F and Q, as above.
 - **Display** (bottom bar): Follow window or a fixed resolution (presets or
   custom, with refresh rate), pixel ratio, Virtual or Real monitor, and Fit /
   Fill window / 100%. Kept per browser.
+- **Quality** (in Display, also on the desktop client and Android): High, Medium
+  or Low caps the bitrate at 100%, 40% or 15% of the default (about 31, 12 and
+  5 Mbit/s at 1080p60). Lower is smoother on a busy or weak network and softer
+  in detail; the resolution stays.
 - **Zoom:** the − / + buttons, Ctrl+wheel, or pinch; drag with two fingers to pan.
 - **Fullscreen** (F or the button) captures browser shortcuts such as Ctrl+T;
   hold **Escape** for a second to leave it.

@@ -29,6 +29,8 @@ object Native {
     /** target: 0 a virtual monitor of its own, 1 the real monitor. Ignored by hosts before protocol 1.1. */
     external fun displayRequest(h: Long, w: Int, hgt: Int, hz: Int, scalePct: Int, target: Int)
     external fun pause(h: Long, paused: Boolean)
+    /** level: 0 high, 1 medium, 2 low. Ignored by hosts before protocol 1.1. */
+    external fun quality(h: Long, level: Int)
     external fun clipboard(h: Long, text: String)
     external fun close(h: Long)
 }

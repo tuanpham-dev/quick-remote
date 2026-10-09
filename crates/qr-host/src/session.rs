@@ -331,6 +331,7 @@ async fn control_loop(
                 let info = crate::display::apply(ctx, video, client, stream, r, limit).await;
                 ctl(info);
             }
+            Msg::Quality { level } => video.set_quality(level),
             Msg::Pause { paused } => {
                 tracing::info!(paused, "client video pause");
                 video.pause(paused);

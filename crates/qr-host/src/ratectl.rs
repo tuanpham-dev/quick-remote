@@ -70,6 +70,8 @@ pub struct RateCtl {
     /// No congestion signals before this: a (re)started stream's first
     /// frames arrive out of step with the client's reassembly.
     grace_until: Option<Instant>,
+    /// The client's quality level: a share of the default target.
+    quality: f64,
 }
 
 pub const FPS_STEPS: [u32; 7] = [240, 144, 120, 60, 30, 15, 5];
@@ -94,9 +96,33 @@ impl RateCtl {
             last_decode_step: None,
             sent_bytes: None,
             grace_until: None,
+            quality: 1.0,
         };
         r.fit_fps();
         r
+    }
+
+    /// The highest target: the default (0.25 bits per pixel per frame)
+    /// times the quality share.
+    fn ceiling(&self) -> u32 {
+        ((self.limits.lan_target() as f64 * self.quality) as u32).max(self.limits.min_kbps)
+    }
+
+    /// Sets the client's quality level (`qr_proto::msg::quality`): High is
+    /// the default budget, Medium 40% of it, Low 15%. Lowering takes
+    /// effect at once; raising does too unless the network holds the target
+    /// lower.
+    pub fn set_quality(&mut self, level: u8) {
+        use qr_proto::msg::quality;
+        // At the old ceiling (not held down by the network): to the new one.
+        let at_ceiling = self.target_kbps >= self.ceiling();
+        self.quality = match level {
+            quality::LOW => 0.15,
+            quality::MEDIUM => 0.4,
+            _ => 1.0,
+        };
+        self.target_kbps = if at_ceiling { self.ceiling() } else { self.target_kbps.min(self.ceiling()) };
+        self.fit_fps();
     }
 
     /// Ignores congestion signals for a second (a stream just started).
@@ -162,7 +188,7 @@ impl RateCtl {
             (self.lossy_windows, self.rising_windows, self.queued_windows) = (0, 0, 0);
         } else if self.may_increase(now)
             && fb.frames_lost == 0
-            && (rx_kbps as f64 >= self.target_kbps as f64 * 0.6 || self.target_kbps < self.limits.lan_target() / 4)
+            && (rx_kbps as f64 >= self.target_kbps as f64 * 0.6 || self.target_kbps < self.ceiling() / 4)
         {
             // Grow only while the stream uses the budget (a still screen
             // proves nothing), except from deep below the default, where
@@ -170,7 +196,7 @@ impl RateCtl {
             let quiet =
                 self.hold_increase_until.is_none_or(|t| now.duration_since(t) >= Duration::from_millis(1500));
             let g: f64 = if quiet { 2.0 } else { 1.08 };
-            self.target_kbps = ((self.target_kbps as f64 * g.powf(dt)) as u32 + 1).min(self.limits.lan_target());
+            self.target_kbps = ((self.target_kbps as f64 * g.powf(dt)) as u32 + 1).min(self.ceiling());
         }
         // A client whose decoder falls behind (more than two frame times per
         // frame) builds a backlog of latency; step the frame rate down for
@@ -443,5 +469,23 @@ mod tests {
         r.on_feedback(&fb(5_000, 0, 2, (0, 0, 0)), ms(1_100));
         r.on_feedback(&fb(5_000, 0, 2, (0, 0, 0)), ms(1_150));
         assert!(r.target_kbps < start);
+    }
+
+    #[test]
+    fn quality_caps_the_target() {
+        let t0 = Instant::now();
+        let mut r = RateCtl::new(limits(), t0);
+        let high = r.target_kbps;
+        r.set_quality(qr_proto::msg::quality::LOW);
+        assert_eq!(r.target_kbps, (high as f64 * 0.15) as u32);
+        // Clean feedback doesn't grow it past the Low ceiling.
+        for i in 0..100 {
+            r.on_feedback(&fb(190_000, 0, 0, (0, 0, 0)), t0 + Duration::from_millis(i * 50));
+        }
+        assert_eq!(r.target_kbps, (high as f64 * 0.15) as u32);
+        r.set_quality(qr_proto::msg::quality::MEDIUM);
+        assert_eq!(r.target_kbps, (high as f64 * 0.4) as u32);
+        r.set_quality(qr_proto::msg::quality::HIGH);
+        assert_eq!(r.target_kbps, high);
     }
 }
