@@ -32,12 +32,11 @@ class Settings(ctx: Context) {
     companion object {
         val PRESETS = listOf(1280 to 720, 1600 to 900, 1920 to 1080, 2560 to 1440, 3840 to 2160)
         val RATES = listOf(30, 60, 120)
-        /** Below 1: the same desktop in fewer pixels (faster, softer). */
-        val RATIOS = listOf(0.5f, 0.75f, 1f, 1.5f, 2f)
+        val RATIOS = listOf(1f, 1.5f, 2f)
 
         /** An even size within what hosts take. */
         fun clampSize(w: Float, h: Float): Pair<Int, Int> =
-            Pair(Math.round(w).coerceIn(320, 7680) and 1.inv(), Math.round(h).coerceIn(200, 4320) and 1.inv())
+            Pair(Math.round(w).coerceIn(640, 7680) and 1.inv(), Math.round(h).coerceIn(360, 4320) and 1.inv())
     }
 }
 

@@ -407,8 +407,7 @@ impl App {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut s.ratio, 0.0, format!("Auto ({:.2}×)", sf.clamp(1.0, 2.0)));
                 for r in RATIOS {
-                    ui.selectable_value(&mut s.ratio, r, format!("{r}×"))
-                        .on_hover_text(if r < 1.0 { "The same desktop in fewer pixels: faster, softer" } else { "" });
+                    ui.selectable_value(&mut s.ratio, r, format!("{r}×"));
                 }
             });
             if matches!(kind, Some(display_kind::KDE | display_kind::GNOME)) {

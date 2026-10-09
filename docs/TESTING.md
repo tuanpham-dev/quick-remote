@@ -122,8 +122,7 @@ Enter the PIN, then click **Start audio**. Hotkeys are Ctrl+Alt+Shift with M, S,
 F and Q, as above.
 
 - **Display** (bottom bar): Follow window or a fixed resolution (presets or
-  custom, with refresh rate), pixel ratio (0.5× and 0.75× trade sharpness
-  for speed: the same desktop in fewer pixels), Virtual or Real monitor, and Fit /
+  custom, with refresh rate), pixel ratio, Virtual or Real monitor, and Fit /
   Fill window / 100%. Kept per browser.
 - **Zoom:** the − / + buttons, Ctrl+wheel, or pinch; drag with two fingers to pan.
 - **Fullscreen** (F or the button) captures browser shortcuts such as Ctrl+T;
