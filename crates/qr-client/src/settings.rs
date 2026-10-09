@@ -61,7 +61,8 @@ impl Default for Settings {
 
 pub const PRESETS: [(u32, u32); 5] = [(1280, 720), (1600, 900), (1920, 1080), (2560, 1440), (3840, 2160)];
 pub const RATES: [u32; 3] = [30, 60, 120];
-pub const RATIOS: [f32; 3] = [1.0, 1.5, 2.0];
+/// Below 1: the same desktop in fewer pixels (faster, softer).
+pub const RATIOS: [f32; 5] = [0.5, 0.75, 1.0, 1.5, 2.0];
 
 fn path(dir: &Path) -> PathBuf {
     dir.join("display.json")
@@ -87,7 +88,7 @@ impl Settings {
 /// An even size within what hosts take.
 pub fn clamp_size(w: f64, h: f64) -> (u16, u16) {
     let even = |v: f64, lo: f64, hi: f64| (v.round().clamp(lo, hi) as u16) & !1;
-    (even(w, 640.0, 7680.0), even(h, 360.0, 4320.0))
+    (even(w, 320.0, 7680.0), even(h, 200.0, 4320.0))
 }
 
 #[cfg(test)]

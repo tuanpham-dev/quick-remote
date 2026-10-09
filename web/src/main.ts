@@ -815,7 +815,7 @@ $<HTMLButtonElement>("custom-apply").addEventListener("click", () => {
 });
 for (const b of displayForm.querySelectorAll<HTMLButtonElement>("[data-ratio]")) {
   b.addEventListener("click", () => {
-    const r = b.dataset.ratio === "auto" ? "auto" : (Number(b.dataset.ratio) as 1 | 1.5 | 2);
+    const r = b.dataset.ratio === "auto" ? "auto" : (Number(b.dataset.ratio) as cfg.Ratio);
     applySettings({ ratio: r });
   });
 }

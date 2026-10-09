@@ -3,6 +3,7 @@
 // which monitor on KDE/GNOME, and how the picture is shown.
 
 export type ViewMode = "fit" | "fill" | "native";
+export type Ratio = "auto" | 0.5 | 0.75 | 1 | 1.5 | 2;
 
 export interface Settings {
   /** Follow the window, or a fixed resolution. */
@@ -11,8 +12,9 @@ export interface Settings {
   fixedH: number;
   /** Refresh rate asked for, Hz. */
   hz: number;
-  /** Remote pixels per CSS pixel: "auto" is the device's, at most 2. */
-  ratio: "auto" | 1 | 1.5 | 2;
+  /** Remote pixels per CSS pixel: "auto" is the device's, at most 2.
+   *  Below 1 trades sharpness for speed: the same desktop in fewer pixels. */
+  ratio: Ratio;
   /** KDE/GNOME: a virtual monitor of our own, or the real one. */
   target: "virtual" | "real";
   view: ViewMode;
@@ -54,5 +56,5 @@ export function effectiveRatio(s: Settings): number {
 /** A custom size from the user: even, within what the host takes. */
 export function clampSize(w: number, h: number): [number, number] {
   const even = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Math.round(v))) & ~1;
-  return [even(w, 640, 7680), even(h, 360, 4320)];
+  return [even(w, 320, 7680), even(h, 200, 4320)];
 }

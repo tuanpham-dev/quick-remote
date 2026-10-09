@@ -560,7 +560,8 @@ class SessionActivity : Activity(), SurfaceHolder.Callback {
 
         heading("Pixel ratio")
         val ratioIdx = if (settings.ratio <= 0f) 0 else Settings.RATIOS.indexOf(settings.ratio).coerceAtLeast(0) + 1
-        val ratio = group("Auto (this screen: %.2f×, used %.2f×)".format(density(), density().coerceIn(1f, 2f)), "1×", "1.5×", "2×", checked = ratioIdx)
+        val ratio = group("Auto (this screen: %.2f×, used %.2f×)".format(density(), density().coerceIn(1f, 2f)),
+            "0.5× (fastest, softest)", "0.75× (faster)", "1×", "1.5×", "2×", checked = ratioIdx)
 
         heading("Monitor")
         val tgt = group("Virtual monitor of its own", "The desktop's real monitor", checked = if (settings.real) 1 else 0)
