@@ -256,6 +256,8 @@ pub struct Opened {
     pub width: u32,
     pub height: u32,
     pub format: Format,
+    /// Whether the compositor draws the pointer into the copies.
+    overlay_cursor: bool,
     _conn: Connection,
 }
 
@@ -281,8 +283,10 @@ fn gpu_target(state: &State, qh: &QueueHandle<State>, offer: (u32, u32, u32)) ->
 
 /// Connects to the compositor at `socket` and prepares to capture
 /// `output` (learning its frame size and format). `gpu`: zero-copy NV12
-/// frames are acceptable (not for 4:4:4 encoding).
-pub fn open(socket: &Path, output: &str, gpu: bool) -> Result<Opened> {
+/// frames are acceptable (not for 4:4:4 encoding). `overlay_cursor`: the
+/// pointer is drawn into the picture (off when the client draws it from
+/// forwarded shapes).
+pub fn open(socket: &Path, output: &str, gpu: bool, overlay_cursor: bool) -> Result<Opened> {
     let stream = UnixStream::connect(socket).with_context(|| format!("connecting to {}", socket.display()))?;
     let conn = Connection::from_socket(stream)?;
     let mut queue = conn.new_event_queue();
@@ -338,6 +342,7 @@ pub fn open(socket: &Path, output: &str, gpu: bool) -> Result<Opened> {
             width: w,
             height: h,
             format: Format::DmaNv12(modifier),
+            overlay_cursor,
             _conn: conn,
         });
     }
@@ -350,6 +355,7 @@ pub fn open(socket: &Path, output: &str, gpu: bool) -> Result<Opened> {
         state,
         output: out,
         target: Target::Shm(buffer),
+        overlay_cursor,
         width: key.1,
         height: key.2,
         format: Format::Raw(format),
@@ -408,7 +414,7 @@ impl Opened {
         let (mut n, mut copy_t, mut pack_t, mut since) = (0u32, Duration::ZERO, Duration::ZERO, Instant::now());
         while !stop.load(Ordering::Relaxed) {
             self.state.reset_frame();
-            let f = manager.capture_output(1, &self.output, &qh, ());
+            let f = manager.capture_output(self.overlay_cursor as i32, &self.output, &qh, ());
             while !self.state.buffer_done && !self.state.failed && !stop.load(Ordering::Relaxed) {
                 dispatch_for(&mut self.queue, &mut self.state, Duration::from_millis(100))?;
             }

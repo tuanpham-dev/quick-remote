@@ -2,6 +2,11 @@
 # A full XFCE desktop on the host's own virtual display:
 #   qr-host --source "vdisplay:/path/to/xfce-desktop.sh"
 #
+# The maintained form of this is built into the host:
+#   qr-host --source vdisplay --desktop xfce4-session [--keyboard-layout de --dpi 120]
+# (crates/qr-host/src/xdesktop.rs), which also forwards the pointer's shape.
+# This script stays for `vdisplay:<script>` users and as a reference.
+#
 # XFCE runs on a rootful, fullscreen Xwayland inside the virtual display.
 # A watcher keeps the X screen at the size of its window and XFCE's UI
 # scale in step with the display's, so resizing the client window or

@@ -66,14 +66,23 @@ Variants worth trying:
   terminal; with nothing given you get an empty sway desktop.)
 - A full XFCE desktop on that virtual display, which follows the client's
   window size and pixel ratio:
-  `./qr-host --source "vdisplay:$PWD/xfce-desktop.sh"`.
-  Chrome started in it uses Vulkan, which gives WebGL on the GPU.
+  `./qr-host --source vdisplay --desktop xfce4-session --keyboard-layout us`.
+  The host runs the desktop in a rootful Xwayland, keeps the X screen and
+  XFCE's scale in step with the display, and forwards the pointer's shape
+  to 1.2 clients instead of drawing it into the picture. `--dpi` sets the
+  font DPI. Chrome started in it uses Vulkan, which gives WebGL on the GPU.
+  (`scripts/xfce-desktop.sh` is the older script form of the same thing.)
 - Hardware H.265 on Intel GPUs (sharper at the same bitrate):
   `sudo ./setup-intel-hevc.sh` installs Intel's full media driver from
   Debian's non-free component. Older GPUs, like UHD 630, encode at most
   4096 pixels wide; larger requests are cut to that.
 - With the web client: `./qr-host --web-listen 0.0.0.0:9443`. It prints a
   `WEB-URL` to open in the browser.
+- For the Perch Remote Desktop extension (or anything that reaches the host
+  over TCP only): `./qr-host --ws-listen 127.0.0.1:14600`. Viewers connect
+  to `ws://127.0.0.1:14600/ws`, `GET /status` says what runs. Loopback only,
+  no pairing. Any number of viewers share one session; the first one drives
+  the display's size (see docs/protocol.md, "WebSocket transport").
 - On KDE, the first start writes `~/.local/share/applications/quickremote-host.desktop`
   so KWin lets the host capture the screen. Nothing to click.
 
@@ -189,6 +198,16 @@ and goes through the relay otherwise.
 - **Monitor changes:** change the host's resolution or rotate a screen while
   connected. The picture should come back within about 2 seconds.
 - **Weak networks:** Wi-Fi, or a phone hotspot (the bitrate should adapt).
+
+### WebSocket viewers (automated)
+
+`sg render -c "node tests/e2e/ws_viewers.mjs"` (after `cargo build -p
+qr-host`) runs two headless Chrome viewers through `--ws-listen`: both decode
+at the host's rate, Take over swaps the driver's seat and the display follows
+the new driver, closing the driver promotes the other, and a third viewer
+behind a link a tenth of the stream's rate is served keyframes only (at most
+4 a second) while the others keep their frame rate. It is part of
+`tests/e2e/run.sh phase1`.
 
 ## 6. If something goes wrong
 

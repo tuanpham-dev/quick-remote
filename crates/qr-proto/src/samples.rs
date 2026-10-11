@@ -144,6 +144,8 @@ pub fn msgs() -> Vec<(&'static str, Msg)> {
         ),
         ("Pause", Msg::Pause { paused: true }),
         ("Quality", Msg::Quality { level: 2 }),
+        ("CursorInfo", Msg::CursorInfo { in_picture: false }),
+        ("Cursor", Msg::Cursor { width: 24, height: 24, xhot: 3, yhot: 2, png: b"\x89PNG\r\n\x1a\n".to_vec() }),
     ]
 }
 

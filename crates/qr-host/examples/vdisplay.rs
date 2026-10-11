@@ -9,7 +9,7 @@ mod vdisplay;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let gpu = std::env::args().any(|a| a == "--gpu");
-    let mut vd = vdisplay::VirtualDisplay::start(1280, 720, 60, Some("foot || weston-terminal || xterm"), gpu)?;
+    let mut vd = vdisplay::VirtualDisplay::start(1280, 720, 60, Some("foot || weston-terminal || xterm"), gpu, None)?;
     std::thread::sleep(std::time::Duration::from_secs(1));
     println!("monitors: {:?}", vd.monitors()?);
     let cast = portal::start(Some(&vd.bus_address()), None).await?;

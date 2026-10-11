@@ -393,7 +393,8 @@ impl App {
                         .selected_text(format!("{}×{}", s.fixed_w, s.fixed_h))
                         .show_ui(ui, |ui| {
                             for (w, h) in PRESETS {
-                                if ui.selectable_label((s.fixed_w, s.fixed_h) == (w, h), format!("{w}×{h}")).clicked() {
+                                if ui.selectable_label((s.fixed_w, s.fixed_h) == (w, h), format!("{w}×{h}")).clicked()
+                                {
                                     (s.fixed_w, s.fixed_h, s.mode) = (w, h, SizeMode::Fixed);
                                 }
                             }
@@ -410,7 +411,8 @@ impl App {
                     ui.label("×");
                     ui.add(egui::TextEdit::singleline(&mut self.custom_h).desired_width(48.0));
                     if ui.button("Use").clicked()
-                        && let (Ok(w), Ok(h)) = (self.custom_w.trim().parse::<f64>(), self.custom_h.trim().parse::<f64>())
+                        && let (Ok(w), Ok(h)) =
+                            (self.custom_w.trim().parse::<f64>(), self.custom_h.trim().parse::<f64>())
                     {
                         let (w, h) = crate::settings::clamp_size(w, h);
                         (s.fixed_w, s.fixed_h, s.mode) = (w as u32, h as u32, SizeMode::Fixed);
@@ -770,7 +772,15 @@ impl App {
         {
             let (w, h, (x, y)) = (g.config.width as f64, g.config.height as f64, self.cursor);
             let edge = 32.0;
-            let v = |p: f64, hi: f64| if p < edge { 12.0 } else if p > hi - edge { -12.0 } else { 0.0 };
+            let v = |p: f64, hi: f64| {
+                if p < edge {
+                    12.0
+                } else if p > hi - edge {
+                    -12.0
+                } else {
+                    0.0
+                }
+            };
             let (dx, dy) = (v(x, w), v(y, h));
             if dx != 0.0 || dy != 0.0 {
                 self.view.pan_by(dx, dy);

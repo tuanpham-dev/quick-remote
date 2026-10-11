@@ -2,10 +2,13 @@
 //! with paired clients.
 
 mod clipboard;
+mod cursor;
 mod display;
 #[cfg(target_os = "linux")]
 mod gpuconv;
 mod input;
+#[cfg(target_os = "linux")]
+mod kwin;
 mod media;
 #[cfg(target_os = "linux")]
 mod mutter;
@@ -34,13 +37,14 @@ mod wlclip;
 mod wlinput;
 #[cfg(target_os = "linux")]
 mod wlkeymap;
+mod ws;
 #[cfg(target_os = "linux")]
-mod kwin;
+mod xdesktop;
 // The Linux-only sources' stand-ins elsewhere.
 #[cfg(not(target_os = "linux"))]
 mod nolinux;
 #[cfg(not(target_os = "linux"))]
-use nolinux::{kwin, mutter, screencopy, vdisplay};
+use nolinux::{kwin, mutter, screencopy, vdisplay, xdesktop};
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -58,7 +62,7 @@ use qr_proto::msg::ErrorCode;
 use qr_proto::{ALPN, Msg};
 
 #[derive(Parser, Debug)]
-#[command(name = "qr-host", about = "Share this machine with QuickRemote clients")]
+#[command(name = "qr-host", version, about = "Share this machine with QuickRemote clients")]
 pub struct Args {
     /// UDP address to accept connections on.
     #[arg(long, default_value = "0.0.0.0:9450")]
@@ -101,6 +105,25 @@ pub struct Args {
     /// Serve the web client here (TCP for the page, UDP for WebTransport).
     #[arg(long)]
     web_listen: Option<SocketAddr>,
+    /// Serve viewers over a plain WebSocket here (`/ws`, plus `/status`),
+    /// for browsers that reach this host only over TCP (the Perch Remote
+    /// Desktop extension). Loopback addresses only: there is no pairing on
+    /// this transport. Several viewers share one session (see
+    /// docs/protocol.md).
+    #[arg(long)]
+    ws_listen: Option<SocketAddr>,
+    /// With `--source vdisplay`: run this X11 desktop command (for example
+    /// `xfce4-session`) in a rootful Xwayland on the virtual display. The X
+    /// screen and the desktop's scale follow the display's size and scale.
+    #[arg(long)]
+    desktop: Option<String>,
+    /// XKB layout for the virtual display's keyboard (keys are sent by
+    /// physical position), e.g. `us`, `de`.
+    #[arg(long)]
+    keyboard_layout: Option<String>,
+    /// Font DPI told to the managed desktop (`--desktop`).
+    #[arg(long, default_value_t = 96)]
+    dpi: u32,
     /// Rendezvous server (`host:port`) for access from the internet.
     #[arg(long)]
     rendezvous: Option<String>,
@@ -190,6 +213,21 @@ pub struct HostCtx {
     /// A wlroots desktop's Wayland socket (screencopy and virtual input),
     /// for `--source wayland`.
     pub wl_socket: Option<PathBuf>,
+    /// The managed X11 desktop on the virtual display (`--desktop`).
+    pub xdesk: Option<Mutex<xdesktop::XDesktop>>,
+    /// Pointer shapes, where the capture leaves the pointer out (X11
+    /// displays, the managed desktop).
+    pub cursor: Option<Arc<cursor::CursorService>>,
+    /// Whether the pointer is drawn into the picture (no shapes).
+    pub cursor_in_picture: bool,
+}
+
+impl HostCtx {
+    /// Environment for a program to start on the managed desktop now
+    /// (its display and scale); empty without one.
+    pub fn desktop_env(&self) -> Vec<(String, String)> {
+        self.xdesk.as_ref().map(|x| x.lock().expect("lock").env()).unwrap_or_default()
+    }
 }
 
 impl HostCtx {
@@ -339,6 +377,13 @@ async fn main() -> Result<()> {
         anyhow::bail!("--service, --install-service and --uninstall-service are for Windows; on Linux use --supervise");
     }
     args.source = resolve_source(&args.source);
+    let args_ws_listen = args.ws_listen;
+    if let Some(w) = args_ws_listen
+        && !w.ip().is_loopback()
+    {
+        eprintln!("--ws-listen must be a loopback address (127.0.0.1 or ::1): the WebSocket transport has no pairing");
+        std::process::exit(2);
+    }
     qr_net::init_crypto();
     qr_net::trace::from_env();
     qr_media::init()?;
@@ -391,23 +436,66 @@ async fn main() -> Result<()> {
     println!("LISTEN {addr}");
     println!("PIN {}", pin.lock().expect("lock"));
     for e in &encoders {
-        tracing::info!(element = e.element, codec = e.codec.name(), hw = e.hw, max = format!("{}x{}", e.max_width, e.max_height), "encoder");
+        tracing::info!(
+            element = e.element,
+            codec = e.codec.name(),
+            hw = e.hw,
+            max = format!("{}x{}", e.max_width, e.max_height),
+            "encoder"
+        );
     }
 
+    #[cfg(target_os = "linux")]
+    if let Some(l) = &args.keyboard_layout {
+        wlinput::set_layout(l);
+    }
+    if args.desktop.is_some() && !args.source.starts_with("vdisplay") {
+        anyhow::bail!("--desktop runs on the virtual display: use it with --source vdisplay");
+    }
     let vd = match args.source.strip_prefix("vdisplay") {
         Some(rest) => {
             let (w, h) = args.size();
             let desktop = rest.strip_prefix(':').filter(|d| !d.is_empty());
-            let d = vdisplay::VirtualDisplay::start(w, h, args.fps, desktop, !args.vd_software)
-                .context("starting the virtual display")?;
+            let d = vdisplay::VirtualDisplay::start(
+                w,
+                h,
+                args.fps,
+                desktop,
+                !args.vd_software,
+                args.keyboard_layout.as_deref(),
+            )
+            .context("starting the virtual display")?;
             for _ in 1..args.vd_outputs {
                 d.add_output(w, h, args.fps).context("adding a virtual monitor")?;
             }
-            tracing::info!(runtime = %d.runtime.display(), outputs = args.vd_outputs, "virtual display up");
+            tracing::info!(runtime = %d.runtime.display(), outputs = args.vd_outputs, renderer = if d.gpu { "GPU (gles2)" } else { "software (pixman)" }, "virtual display up");
             Some(Mutex::new(d))
         }
         None => None,
     };
+    // The managed X11 desktop, and the pointer shapes: forwarded where the
+    // capture leaves the pointer out (X11 displays, the managed desktop),
+    // drawn into the picture everywhere else.
+    let xdesk = match (&vd, &args.desktop) {
+        (Some(vd), Some(cmd)) => Some(Mutex::new(
+            xdesktop::XDesktop::start(&vd.lock().expect("lock"), cmd, args.keyboard_layout.as_deref(), args.dpi)
+                .context("starting the managed desktop")?,
+        )),
+        _ => None,
+    };
+    let cursor_display = match (&xdesk, args.source.strip_prefix("x11:")) {
+        (Some(x), _) => Some(x.lock().expect("lock").display.clone()),
+        (None, Some(d)) => Some(d.to_string()),
+        _ => None,
+    };
+    let cursor = cursor_display.and_then(|d| match cursor::CursorService::start(Some(&d), xdesk.is_some()) {
+        Ok(c) => Some(Arc::new(c)),
+        Err(e) => {
+            tracing::warn!("cursor shapes stay in the picture: {e:#}");
+            None
+        }
+    });
+    let cursor_in_picture = cursor.is_none();
     // A Wayland desktop: wlroots compositors through screencopy and the
     // virtual input protocols, GNOME through mutter's remote-desktop API,
     // KDE through KWin's screencast and fake input.
@@ -462,6 +550,15 @@ async fn main() -> Result<()> {
             _ => input::open(&args.input, &args.source, vd_socket.as_deref()).context("opening the input backend")?,
         },
     };
+    // The managed X desktop: pointer, buttons, wheel and text through
+    // XTest on its own display.
+    let injector = match (&xdesk, args.input.as_str()) {
+        (Some(x), "auto") => {
+            let x = x.lock().expect("lock");
+            input::with_x_desktop(injector, &x.display, x.scale_handle())
+        }
+        _ => injector,
+    };
     tracing::info!(backend = injector.name(), "input");
     let web_peers: Arc<web::WebPeers> = Arc::default();
     if let Some(wl) = args.web_listen {
@@ -513,8 +610,52 @@ async fn main() -> Result<()> {
         kwin,
         displays: Default::default(),
         wl_socket,
+        xdesk,
+        cursor,
+        cursor_in_picture,
     });
+    if let Some(wsl) = args_ws_listen {
+        let gw_id = web::gateway_identity(&dir, &keystore)?;
+        let hub = ws::Hub::new(ctx.clone(), gw_id, addr);
+        tokio::spawn(async move {
+            if let Err(e) = ws::run(hub, wsl).await {
+                tracing::error!("WebSocket viewers: {e:#}");
+                std::process::exit(2);
+            }
+        });
+    }
     let active: Arc<tokio::sync::Mutex<Option<Active>>> = Arc::default();
+    // A managed display or desktop whose process dies (sway, Xwayland, the
+    // session) leaves nothing to stream: say what died and stop, so that
+    // whatever started this host (Perch's panel) can start it again.
+    if ctx.vd.is_some() || ctx.xdesk.is_some() {
+        let ctx = ctx.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
+            loop {
+                tick.tick().await;
+                let gone = ctx
+                    .xdesk
+                    .as_ref()
+                    .and_then(|x| x.lock().expect("lock").exited().map(|e| format!("managed desktop: {e}")))
+                    .or_else(|| {
+                        ctx.vd
+                            .as_ref()
+                            .and_then(|v| v.lock().expect("lock").exited().map(|e| format!("virtual display: {e}")))
+                    });
+                if let Some(e) = gone {
+                    tracing::error!("{e}; stopping");
+                    if let Some(x) = &ctx.xdesk {
+                        x.lock().expect("lock").shutdown();
+                    }
+                    if let Some(vd) = &ctx.vd {
+                        vd.lock().expect("lock").shutdown();
+                    }
+                    std::process::exit(3);
+                }
+            }
+        });
+    }
     // Stopped with SIGTERM or Ctrl+C: end what this host started (the
     // virtual display and its desktop) before exiting.
     {
@@ -522,6 +663,9 @@ async fn main() -> Result<()> {
         tokio::spawn(async move {
             shutdown_signal().await;
             tracing::info!("stopping");
+            if let Some(x) = &ctx.xdesk {
+                x.lock().expect("lock").shutdown();
+            }
             if let Some(vd) = &ctx.vd {
                 vd.lock().expect("lock").shutdown();
             }

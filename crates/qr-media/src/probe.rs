@@ -51,7 +51,11 @@ fn caps_max(el: &str) -> (u32, u32) {
         }
         for st in t.caps().iter() {
             let get = |k: &str| match st.value(k) {
-                Ok(v) => v.get::<gst::IntRange<i32>>().map(|r| r.max() as u32).or_else(|_| v.get::<i32>().map(|v| v as u32)).ok(),
+                Ok(v) => v
+                    .get::<gst::IntRange<i32>>()
+                    .map(|r| r.max() as u32)
+                    .or_else(|_| v.get::<i32>().map(|v| v as u32))
+                    .ok(),
                 Err(_) => None,
             };
             if let (Some(w), Some(h)) = (get("width"), get("height")) {

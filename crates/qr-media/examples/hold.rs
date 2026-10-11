@@ -31,7 +31,9 @@ fn main() -> anyhow::Result<()> {
         bitrate_kbps: 2_000,
         chroma444: false,
     };
-    let enc = Encoder::start(&cfg, qr_media::ClockMap::new(now), move |f| a2.lock().unwrap().push((f.au.to_vec(), f.keyframe)))?;
+    let enc = Encoder::start(&cfg, qr_media::ClockMap::new(now), move |f| {
+        a2.lock().unwrap().push((f.au.to_vec(), f.keyframe))
+    })?;
     std::thread::sleep(Duration::from_millis(3000));
     drop(enc);
     let aus = aus.lock().unwrap().clone();
@@ -67,7 +69,12 @@ fn main() -> anyhow::Result<()> {
         let p50 = dt.get(dt.len() / 2).copied().unwrap_or(0) as f64 / 1000.0;
         let mut h = DefaultHasher::new();
         frames.iter().for_each(|f| f.1.hash(&mut h));
-        println!("{enc_name} -> {d}: {}/{} frames, p50 {p50:.1} ms, pictures {:016x}", frames.len(), aus.len(), h.finish());
+        println!(
+            "{enc_name} -> {d}: {}/{} frames, p50 {p50:.1} ms, pictures {:016x}",
+            frames.len(),
+            aus.len(),
+            h.finish()
+        );
     }
     Ok(())
 }

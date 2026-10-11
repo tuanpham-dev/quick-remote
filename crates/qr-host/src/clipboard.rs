@@ -30,9 +30,19 @@ pub async fn start(ctx: &HostCtx, ctl: qr_net::files::Control) -> Option<Clipboa
     };
     #[cfg(not(target_os = "linux"))]
     let gnome: Option<anyhow::Result<_>> = None;
-    let started = match gnome.or(wayland) {
-        Some(r) => r,
-        None => qr_clip::spawn(ctx.args.source.strip_prefix("x11:")?),
+    // A managed X desktop (`--desktop`): its apps live on the rootful
+    // Xwayland, whose CLIPBOARD is what they read and write, so the sync
+    // runs there rather than on the compositor's selection.
+    #[cfg(target_os = "linux")]
+    let xdesk = ctx.xdesk.as_ref().map(|x| x.lock().expect("lock").display.clone());
+    #[cfg(not(target_os = "linux"))]
+    let xdesk: Option<String> = None;
+    let started = match xdesk {
+        Some(d) => qr_clip::spawn(&d),
+        None => match gnome.or(wayland) {
+            Some(r) => r,
+            None => qr_clip::spawn(ctx.args.source.strip_prefix("x11:")?),
+        },
     };
     let (tx, rx) = match started {
         Ok(x) => x,

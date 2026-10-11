@@ -22,10 +22,12 @@ pub struct VirtualDisplay {
     swaysock: PathBuf,
     /// The display's Xwayland (`:N`), for X11 apps there.
     pub x_display: Option<String>,
+    /// Rendering on the GPU (gles2) rather than in software (pixman).
+    pub gpu: bool,
 }
 
 /// The X displays with a socket now.
-fn x_sockets() -> std::collections::HashSet<String> {
+pub(crate) fn x_sockets() -> std::collections::HashSet<String> {
     std::fs::read_dir("/tmp/.X11-unix")
         .map(|d| {
             d.flatten().filter_map(|e| e.file_name().to_str()?.strip_prefix('X').map(|n| format!(":{n}"))).collect()
@@ -33,7 +35,33 @@ fn x_sockets() -> std::collections::HashSet<String> {
         .unwrap_or_default()
 }
 
-fn spawn(name: &'static str, cmd: &mut Command, log: &Path) -> Result<Child> {
+/// The render node the GPU paths use (`QR_RENDER_NODE`, else the first
+/// `/dev/dri/renderD*`), if this process may open it.
+pub fn render_node_usable() -> Result<PathBuf> {
+    let node = match std::env::var("QR_RENDER_NODE") {
+        Ok(n) => PathBuf::from(n),
+        Err(_) => std::fs::read_dir("/dev/dri")
+            .ok()
+            .and_then(|d| {
+                let mut nodes: Vec<PathBuf> = d
+                    .flatten()
+                    .map(|e| e.path())
+                    .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("renderD")))
+                    .collect();
+                nodes.sort();
+                nodes.into_iter().next()
+            })
+            .context("no GPU render node (/dev/dri/renderD*)")?,
+    };
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&node)
+        .with_context(|| format!("cannot open {} (is this user in the render group?)", node.display()))?;
+    Ok(node)
+}
+
+pub(crate) fn spawn(name: &'static str, cmd: &mut Command, log: &Path) -> Result<Child> {
     let out = std::fs::File::create(log)?;
     cmd.stdin(Stdio::null()).stdout(out.try_clone()?).stderr(out);
     // SAFETY: only async-signal-safe calls between fork and exec.
@@ -47,7 +75,7 @@ fn spawn(name: &'static str, cmd: &mut Command, log: &Path) -> Result<Child> {
     cmd.spawn().with_context(|| format!("starting {name}"))
 }
 
-fn wait_for(path: &Path, what: &str, timeout: Duration) -> Result<()> {
+pub(crate) fn wait_for(path: &Path, what: &str, timeout: Duration) -> Result<()> {
     let end = Instant::now() + timeout;
     while !path.exists() {
         if Instant::now() > end {
@@ -61,8 +89,9 @@ fn wait_for(path: &Path, what: &str, timeout: Duration) -> Result<()> {
 impl VirtualDisplay {
     /// Starts the display at `w×h@refresh`. `desktop` runs inside it (for
     /// example `xfce4-session` under Xwayland, or a game); `gpu` selects the
-    /// GLES renderer (otherwise pixman, in software).
-    pub fn start(w: u32, h: u32, refresh: u32, desktop: Option<&str>, gpu: bool) -> Result<Self> {
+    /// GLES renderer (otherwise pixman, in software). `layout` is the XKB
+    /// layout for the display's keyboard (keys are sent by position).
+    pub fn start(w: u32, h: u32, refresh: u32, desktop: Option<&str>, gpu: bool, layout: Option<&str>) -> Result<Self> {
         let rt = std::env::temp_dir().join(format!("qr-vd-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&rt);
         std::fs::create_dir_all(rt.join("cfg/xdg-desktop-portal"))?;
@@ -132,6 +161,10 @@ context.modules = [
             }
             None => String::new(),
         };
+        let xkb = match layout.filter(|l| !l.is_empty() && l.chars().all(|c| c.is_ascii_alphanumeric() || c == ',')) {
+            Some(l) => format!("input * xkb_layout {l}\n"),
+            None => String::new(),
+        };
         std::fs::write(
             rt.join("sway.conf"),
             format!(
@@ -139,7 +172,7 @@ context.modules = [
                  xwayland enable\n\
                  default_border none\n\
                  seat * hide_cursor 0\n\
-                 {exec}"
+                 {xkb}{exec}"
             ),
         )?;
 
@@ -157,6 +190,7 @@ context.modules = [
             env: Vec::new(),
             swaysock: PathBuf::new(),
             x_display: None,
+            gpu,
         };
         let cmd = |prog: &str, env: &[(String, String)]| {
             let mut c = Command::new(prog);
@@ -182,6 +216,27 @@ context.modules = [
             spawn("pipewire-pulse", &mut cmd("pipewire-pulse", &env), &log("pipewire-pulse"))?,
         ));
 
+        // The GPU renderer needs the render node; a host without access
+        // to it (a service outside the render group, a machine without a
+        // GPU) renders in software instead of failing to start.
+        let gpu = match (gpu, render_node_usable()) {
+            (true, Ok(node)) => {
+                tracing::info!(node = %node.display(), "virtual display: GPU rendering");
+                true
+            }
+            (true, Err(e)) => {
+                tracing::warn!(
+                    "virtual display: software rendering ({e}); for the GPU, add this user to the group that owns \
+                     the render node and log in again (a service picks the group up at its next start)"
+                );
+                false
+            }
+            (false, _) => {
+                tracing::info!("virtual display: software rendering (--vd-software)");
+                false
+            }
+        };
+        me.gpu = gpu;
         let mut c = cmd("sway", &env);
         c.args(["-c", &rt.join("sway.conf").display().to_string()]);
         c.env("WLR_BACKENDS", "headless")
@@ -279,6 +334,21 @@ context.modules = [
         format!("unix:path={}", self.runtime.join("bus").display())
     }
 
+    /// sway's IPC socket, for a follower of the output outside this struct.
+    pub fn sway_socket(&self) -> PathBuf {
+        self.swaysock.clone()
+    }
+
+    /// Environment for programs on this display.
+    pub fn env(&self) -> &[(String, String)] {
+        &self.env
+    }
+
+    /// The first output's logical size and scale.
+    pub fn output_state(&self) -> Result<(u32, u32, f64)> {
+        output_state(&self.swaysock)
+    }
+
     fn swaymsg(&self, args: &[&str]) -> Result<String> {
         let out = Command::new("swaymsg").env("SWAYSOCK", &self.swaysock).args(args).output()?;
         if !out.status.success() {
@@ -357,6 +427,21 @@ context.modules = [
         }
         None
     }
+}
+
+/// The first output's logical size and scale, read over sway's IPC.
+pub fn output_state(swaysock: &Path) -> Result<(u32, u32, f64)> {
+    let out = Command::new("swaymsg").env("SWAYSOCK", swaysock).args(["-t", "get_outputs", "-r"]).output()?;
+    if !out.status.success() {
+        bail!("swaymsg get_outputs: {}", String::from_utf8_lossy(&out.stdout));
+    }
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout)?;
+    let o = v.as_array().and_then(|a| a.first()).context("sway has no outputs")?;
+    Ok((
+        o["rect"]["width"].as_u64().unwrap_or(0) as u32,
+        o["rect"]["height"].as_u64().unwrap_or(0) as u32,
+        o["scale"].as_f64().unwrap_or(1.0),
+    ))
 }
 
 impl Drop for VirtualDisplay {

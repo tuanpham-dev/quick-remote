@@ -18,7 +18,14 @@ pub mod vdisplay {
     }
 
     impl VirtualDisplay {
-        pub fn start(_w: u32, _h: u32, _refresh: u32, _desktop: Option<&str>, _gpu: bool) -> Result<Self> {
+        pub fn start(
+            _w: u32,
+            _h: u32,
+            _refresh: u32,
+            _desktop: Option<&str>,
+            _gpu: bool,
+            _layout: Option<&str>,
+        ) -> Result<Self> {
             bail!("the virtual display needs Linux")
         }
         pub fn add_output(&self, _w: u32, _h: u32, _refresh: u32) -> Result<String> {
@@ -40,6 +47,43 @@ pub mod vdisplay {
             match self.never {}
         }
         pub fn pipewire_fd(&self) -> Result<i32> {
+            match self.never {}
+        }
+        pub fn output_state(&self) -> Result<(u32, u32, f64)> {
+            match self.never {}
+        }
+        pub fn sway_socket(&self) -> PathBuf {
+            match self.never {}
+        }
+        pub fn env(&self) -> &[(String, String)] {
+            match self.never {}
+        }
+    }
+}
+
+pub mod xdesktop {
+    use std::convert::Infallible;
+
+    use anyhow::{Result, bail};
+
+    pub struct XDesktop {
+        pub display: String,
+        never: Infallible,
+    }
+
+    impl XDesktop {
+        pub fn start(
+            _vd: &super::vdisplay::VirtualDisplay,
+            _command: &str,
+            _layout: Option<&str>,
+            _dpi: u32,
+        ) -> Result<Self> {
+            bail!("the managed desktop needs Linux")
+        }
+        pub fn env(&self) -> Vec<(String, String)> {
+            match self.never {}
+        }
+        pub fn shutdown(&mut self) {
             match self.never {}
         }
     }
@@ -231,7 +275,7 @@ pub mod screencopy {
         bail!("Wayland capture needs Linux")
     }
 
-    pub fn open(_socket: &Path, _output: &str, _gpu: bool) -> Result<Opened> {
+    pub fn open(_socket: &Path, _output: &str, _gpu: bool, _overlay_cursor: bool) -> Result<Opened> {
         bail!("Wayland capture needs Linux")
     }
 

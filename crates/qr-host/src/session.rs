@@ -115,12 +115,32 @@ pub async fn run(
         .filter(|_| conn.remote_address().ip().is_loopback())
         .map(|p| p.max_datagram);
     let enc444 = probe::choose_444(&allowed_encoders(&ctx), &decoders);
-    let video =
-        Arc::new(Video::new(ctx.clone(), conn.clone(), enc.clone(), enc444, max_datagram, ctl.clone()));
+    let video = Arc::new(Video::new(ctx.clone(), conn.clone(), enc.clone(), enc444, max_datagram, ctl.clone()));
     video.start(0, 0, mode).await?;
     if display_aware {
         ctl(crate::display::info(&ctx, &video, 0, String::new()));
     }
+    // Pointer shapes (protocol 1.2): whether they come at all, the current
+    // one, then every change.
+    let cursor_aware = client_minor >= 2;
+    if cursor_aware {
+        ctl(Msg::CursorInfo { in_picture: ctx.cursor_in_picture });
+        if let Some(img) = ctx.cursor.as_ref().and_then(|c| c.current()) {
+            ctl(img.msg());
+        }
+    }
+    let cursor_task = ctx.cursor.as_ref().filter(|_| cursor_aware).map(|c| {
+        let (mut rx, ctl) = (c.subscribe(), ctl.clone());
+        tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(img) => ctl(img.msg()),
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => return,
+                }
+            }
+        })
+    });
     let _audio = match crate::media::start_audio(&ctx, &conn) {
         Ok(a) => a,
         Err(e) => {
@@ -253,6 +273,9 @@ pub async fn run(
     // A virtual monitor of this client's stays for a reconnect, then goes.
     ctx.displays.release(&ctx, &client_key);
     watchdog.abort();
+    if let Some(t) = cursor_task {
+        t.abort();
+    }
     ctl_writer.abort();
     rumble_task.abort();
     outbox_task.abort();

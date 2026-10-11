@@ -74,7 +74,7 @@ pub struct RateCtl {
     quality: f64,
 }
 
-pub const FPS_STEPS: [u32; 7] = [240, 144, 120, 60, 30, 15, 5];
+pub const FPS_STEPS: [u32; 12] = [240, 144, 120, 90, 60, 45, 30, 24, 20, 15, 10, 5];
 
 impl RateCtl {
     pub fn new(limits: Limits, now: Instant) -> Self {
@@ -155,8 +155,14 @@ impl RateCtl {
         let in_grace = self.grace_until.is_some_and(|t| now < t);
 
         // Queueing delay relative to the lowest delay seen in the last 10 s.
+        // A report without frames carries no delays (a gateway's filler,
+        // a still screen): it must not become the baseline.
         let base = match self.base_delay {
-            Some((d, t)) if now.duration_since(t) < Duration::from_secs(10) && d <= fb.delay_min_us => d,
+            Some((d, t))
+                if fb.frames_rx == 0 || (now.duration_since(t) < Duration::from_secs(10) && d <= fb.delay_min_us) =>
+            {
+                d
+            }
             _ => {
                 self.base_delay = Some((fb.delay_min_us, now));
                 fb.delay_min_us
@@ -175,8 +181,31 @@ impl RateCtl {
             count(&mut self.rising_windows, arrived && fb.delay_slope > 3_000 && queueing_ms > 8.0);
             count(&mut self.queued_windows, arrived && queueing_ms > 80.0);
         }
-        let congested = self.lossy_windows >= 2 || self.rising_windows >= 3 || self.queued_windows >= 2;
+        // A client whose decoder is slower than the frame rate reports
+        // rising delays too, because its frames queue up in the browser,
+        // not on the path: that is the decode cap's job below, and cutting
+        // the bit budget for it only starves the picture (the frame rate
+        // then falls to the floor and never climbs back).
+        let frame_us = 1_000_000 / self.fps.max(1);
+        let decoder_bound = fb.decode_us > frame_us;
+        let congested =
+            self.lossy_windows >= 2 || (!decoder_bound && (self.rising_windows >= 3 || self.queued_windows >= 2));
+        if decoder_bound {
+            (self.rising_windows, self.queued_windows) = (0, 0);
+        }
         if congested {
+            tracing::debug!(
+                lossy = self.lossy_windows,
+                rising = self.rising_windows,
+                queued = self.queued_windows,
+                idle,
+                rx_kbps,
+                queueing_ms = queueing_ms as i64,
+                slope = fb.delay_slope,
+                target = self.target_kbps,
+                fps = self.fps,
+                "rate cut"
+            );
             let to = if idle {
                 (self.target_kbps as f64 * 0.85) as u32
             } else if rx_kbps > 0 {
@@ -193,8 +222,7 @@ impl RateCtl {
             // Grow only while the stream uses the budget (a still screen
             // proves nothing), except from deep below the default, where
             // waiting for a busy screen would leave a squeeze in place.
-            let quiet =
-                self.hold_increase_until.is_none_or(|t| now.duration_since(t) >= Duration::from_millis(1500));
+            let quiet = self.hold_increase_until.is_none_or(|t| now.duration_since(t) >= Duration::from_millis(1500));
             let g: f64 = if quiet { 2.0 } else { 1.08 };
             self.target_kbps = ((self.target_kbps as f64 * g.powf(dt)) as u32 + 1).min(self.ceiling());
         }
@@ -203,7 +231,6 @@ impl RateCtl {
         // 3 s at a time until it keeps up. One slow window is a hiccup, not
         // a backlog (3 in a row are), and after a step the queued frames
         // take a while to drain, so steps are at least 500 ms apart.
-        let frame_us = 1_000_000 / self.fps.max(1);
         if fb.decode_us > 2 * frame_us {
             self.slow_windows += 1;
             if let Some((_, until)) = &mut self.decode_cap {
@@ -229,6 +256,13 @@ impl RateCtl {
         let after = (self.target_kbps, self.fps, (self.parity * 100.0) as u32);
         if after != before {
             self.last_change = now;
+            tracing::debug!(
+                target = self.target_kbps,
+                fps = self.fps,
+                decode_cap = self.decode_cap.map(|c| c.0),
+                decode_us = fb.decode_us,
+                "rate now"
+            );
         }
         after != before
     }
@@ -407,15 +441,16 @@ mod tests {
         for t in [100, 150, 200] {
             r.on_feedback(&f, ms(t));
         }
-        assert_eq!(r.fps, 30, "three in a row: a backlog");
+        assert_eq!(r.fps, 45, "three in a row: a backlog");
         for t in [250, 300, 350] {
             r.on_feedback(&f, ms(t));
         }
-        assert_eq!(r.fps, 30, "the backlog drains before the next step");
+        assert_eq!(r.fps, 45, "the backlog drains before the next step");
         for t in [750, 800, 850] {
             r.on_feedback(&f, ms(t));
         }
-        assert_eq!(r.fps, 15, "still behind: another step down");
+        assert_eq!(r.fps, 30, "still behind: another step down");
+        assert_eq!(r.target_kbps, 31_104, "a slow decoder is not congestion: the budget stays");
         f.decode_us = 3_000;
         r.on_feedback(&f, ms(4_000));
         assert_eq!(r.fps, 60, "back to full rate once the cap expires");

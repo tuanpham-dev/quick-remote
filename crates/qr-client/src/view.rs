@@ -25,7 +25,16 @@ pub struct View {
 
 impl Default for View {
     fn default() -> Self {
-        Self { mode: ViewMode::Fit, natural: 1.0, zoom: 1.0, x: 0.0, y: 0.0, scale: 1.0, win: (1.0, 1.0), pic: (1.0, 1.0) }
+        Self {
+            mode: ViewMode::Fit,
+            natural: 1.0,
+            zoom: 1.0,
+            x: 0.0,
+            y: 0.0,
+            scale: 1.0,
+            win: (1.0, 1.0),
+            pic: (1.0, 1.0),
+        }
     }
 }
 
@@ -123,7 +132,9 @@ mod tests {
     #[test]
     fn maps_points_at_any_zoom_and_pan() {
         let mut v = view(ViewMode::Fit, (1100, 630), (1920, 1080));
-        let at = |v: &View, rx: f32, ry: f32| v.to_remote((v.x + (rx + 0.5) * v.scale) as f64, (v.y + (ry + 0.5) * v.scale) as f64);
+        let at = |v: &View, rx: f32, ry: f32| {
+            v.to_remote((v.x + (rx + 0.5) * v.scale) as f64, (v.y + (ry + 0.5) * v.scale) as f64)
+        };
         assert_eq!(at(&v, 400.0, 300.0), Some((400, 300)));
         v.set_zoom(2.0, Some((500.0, 300.0)));
         v.pan_by(-5000.0, -5000.0);

@@ -1,0 +1,90 @@
+# Release builds of qr-host on every v* tag: one archive per architecture,
+# built in a Debian 12 container (glibc 2.36, GStreamer 1.22) so the same
+# binary runs on Debian 12 and 13 and Ubuntu 24.04 and newer. The web
+# client is built and embedded; the two archives and SHA256SUMS become a
+# GitHub release, which the Perch Remote Desktop extension downloads.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  WASM_BINDGEN_VERSION: 0.2.129
+
+jobs:
+  build:
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    container: debian:12
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+    steps:
+      - name: Install system packages
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl git build-essential pkg-config file \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev nodejs npm
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: |
+          curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --target wasm32-unknown-unknown
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Install wasm-bindgen
+        run: |
+          case "${{ matrix.arch }}" in
+            x64) triple=x86_64-unknown-linux-musl ;;
+            arm64) triple=aarch64-unknown-linux-gnu ;;
+          esac
+          name="wasm-bindgen-$WASM_BINDGEN_VERSION-$triple"
+          curl -sSfL "https://github.com/rustwasm/wasm-bindgen/releases/download/$WASM_BINDGEN_VERSION/$name.tar.gz" | tar -xz
+          install -m 755 "$name/wasm-bindgen" "$HOME/.cargo/bin/wasm-bindgen"
+          wasm-bindgen --version
+      - name: Build the web client
+        run: |
+          (cd web && npm ci)
+          sh scripts/build-web.sh
+      - name: Build qr-host
+        run: cargo build --release --locked -p qr-host
+      - name: Package
+        run: |
+          name=qr-host-linux-${{ matrix.arch }}
+          mkdir -p "dist/$name"
+          cp target/release/qr-host README.md "dist/$name/"
+          strip "dist/$name/qr-host"
+          file "dist/$name/qr-host"
+          "dist/$name/qr-host" --version
+          tar -C "dist/$name" -czf "dist/$name.tar.gz" qr-host README.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qr-host-linux-${{ matrix.arch }}
+          path: dist/qr-host-linux-${{ matrix.arch }}.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum qr-host-linux-x64.tar.gz qr-host-linux-arm64.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            dist/qr-host-linux-x64.tar.gz
+            dist/qr-host-linux-arm64.tar.gz
+            dist/SHA256SUMS
+          generate_release_notes: true

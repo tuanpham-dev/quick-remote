@@ -367,7 +367,6 @@ impl KwinSession {
         self.virtuals.lock().unwrap().contains_key(name)
     }
 
-
     pub fn injector(&self) -> Result<KwinInput> {
         let fake = self.fake.clone().context("KWin offers no fake input to this program")?;
         let keymap = crate::wlkeymap::watch(&self.socket)
@@ -510,7 +509,6 @@ impl Injector for KwinInput {
         "kwin"
     }
 }
-
 
 /// Runs `kscreen-doctor` (Plasma's display tool) with `args`: its output.
 pub fn kscreen(args: &[&str]) -> Result<String> {

@@ -103,9 +103,21 @@ delegate_noop!(State: ZwlrVirtualPointerV1);
 delegate_noop!(State: ZwpVirtualKeyboardManagerV1);
 delegate_noop!(State: ZwpVirtualKeyboardV1);
 
-/// The default keymap as text (libxkbcommon, loaded at run time).
+/// The layout the virtual keyboard's keymap is built with (`--keyboard-layout`).
+static LAYOUT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Sets the XKB layout for every keymap built from now on (before the
+/// first keyboard opens).
+pub(crate) fn set_layout(layout: &str) {
+    let _ = LAYOUT.set(layout.to_string());
+}
+
+/// The default keymap as text (libxkbcommon, loaded at run time): the
+/// configured layout, else the `XKB_DEFAULT_*` environment or the system
+/// default.
 pub(crate) fn default_keymap() -> Result<String> {
-    use xkbcommon_dl::{xkb_context_flags, xkb_keymap_compile_flags, xkb_keymap_format};
+    use xkbcommon_dl::{xkb_context_flags, xkb_keymap_compile_flags, xkb_keymap_format, xkb_rule_names};
+    let layout = LAYOUT.get().map(|l| std::ffi::CString::new(l.as_str())).transpose()?;
     let x = xkbcommon_dl::xkbcommon_option().context("libxkbcommon is not installed")?;
     // SAFETY: libxkbcommon calls as documented; every object is released.
     unsafe {
@@ -114,8 +126,18 @@ pub(crate) fn default_keymap() -> Result<String> {
             bail!("libxkbcommon: no context");
         }
         // No names: the XKB_DEFAULT_* environment, else the system default.
-        let km =
-            (x.xkb_keymap_new_from_names)(ctx, std::ptr::null(), xkb_keymap_compile_flags::XKB_KEYMAP_COMPILE_NO_FLAGS);
+        let names = layout.as_ref().map(|l| xkb_rule_names {
+            rules: std::ptr::null(),
+            model: std::ptr::null(),
+            layout: l.as_ptr(),
+            variant: std::ptr::null(),
+            options: std::ptr::null(),
+        });
+        let km = (x.xkb_keymap_new_from_names)(
+            ctx,
+            names.as_ref().map_or(std::ptr::null(), |n| n as *const _),
+            xkb_keymap_compile_flags::XKB_KEYMAP_COMPILE_NO_FLAGS,
+        );
         (x.xkb_context_unref)(ctx);
         if km.is_null() {
             bail!("compiling the default keymap failed");

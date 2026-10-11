@@ -46,6 +46,8 @@ phase1)
 	run lan gnome_clip
 	# The web client's display controls, in headless Chrome (no netns).
 	node "$here/web_display.mjs" 2>&1 | grep -E '^(PASS|FAIL|ENV-BLOCKED)' | tee -a "$RESULTS" || echo "ERROR script web_display" | tee -a "$RESULTS"
+	# WebSocket viewers through the gateway hub (no netns).
+	node "$here/ws_viewers.mjs" 2>&1 | grep -E '^(PASS|FAIL|ENV-BLOCKED)' | tee -a "$RESULTS" || echo "ERROR script ws_viewers" | tee -a "$RESULTS"
 	;;
 phase2)
 	NAT_MODE=cone run nat-cone a4

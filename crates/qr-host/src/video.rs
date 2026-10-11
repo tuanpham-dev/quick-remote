@@ -208,7 +208,10 @@ impl Video {
             }
             let name = mon.name.clone();
             let gpu = !self.chroma444.load(Ordering::Relaxed);
-            let o = tokio::task::spawn_blocking(move || crate::screencopy::open(&socket, &name, gpu))
+            // The pointer stays out of the picture when its shapes are
+            // forwarded (the managed desktop); otherwise it is drawn in.
+            let overlay = self.ctx.cursor.is_none();
+            let o = tokio::task::spawn_blocking(move || crate::screencopy::open(&socket, &name, gpu, overlay))
                 .await?
                 .context("capturing the Wayland output")?;
             (w, h) = (o.width, o.height);

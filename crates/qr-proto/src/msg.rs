@@ -339,6 +339,21 @@ pub enum Msg {
     Quality {
         level: u8,
     },
+    /// Host → client (protocol 1.2+), once per session before the first
+    /// frame: whether the pointer is drawn into the picture. When it isn't,
+    /// the client draws the shapes from [`Msg::Cursor`] itself.
+    CursorInfo {
+        in_picture: bool,
+    },
+    /// Host → client (protocol 1.2+): the pointer's current shape as a PNG
+    /// with its hotspot, sent on every change.
+    Cursor {
+        width: u16,
+        height: u16,
+        xhot: u16,
+        yhot: u16,
+        png: Vec<u8>,
+    },
     /// A message type this build doesn't know (from a newer peer): ignored.
     Unknown(u8),
 }
@@ -401,6 +416,8 @@ mod tag {
     pub const DISPLAY_INFO: u8 = 29;
     pub const PAUSE: u8 = 30;
     pub const QUALITY: u8 = 31;
+    pub const CURSOR_INFO: u8 = 32;
+    pub const CURSOR: u8 = 33;
 }
 
 fn put_cap(w: &mut Writer, c: &CodecCap) {
@@ -533,7 +550,13 @@ impl Msg {
                 w.u8(tag::ERROR).u16(*code).str(text);
             }
             Msg::DisplayRequest { stream, width, height, refresh, scale_pct, target } => {
-                w.u8(tag::DISPLAY_REQUEST).u8(*stream).u16(*width).u16(*height).u16(*refresh).u16(*scale_pct).u8(*target);
+                w.u8(tag::DISPLAY_REQUEST)
+                    .u8(*stream)
+                    .u16(*width)
+                    .u16(*height)
+                    .u16(*refresh)
+                    .u16(*scale_pct)
+                    .u8(*target);
             }
             Msg::DisplayInfo { stream, kind, width, height, scale_pct, note } => {
                 w.u8(tag::DISPLAY_INFO).u8(*stream).u8(*kind).u16(*width).u16(*height).u16(*scale_pct).str(note);
@@ -543,6 +566,12 @@ impl Msg {
             }
             Msg::Pause { paused } => {
                 w.u8(tag::PAUSE).bool(*paused);
+            }
+            Msg::CursorInfo { in_picture } => {
+                w.u8(tag::CURSOR_INFO).bool(*in_picture);
+            }
+            Msg::Cursor { width, height, xhot, yhot, png } => {
+                w.u8(tag::CURSOR).u16(*width).u16(*height).u16(*xhot).u16(*yhot).bytes(png);
             }
             Msg::Unknown(t) => {
                 w.u8(*t);
@@ -656,6 +685,10 @@ impl Msg {
             },
             tag::PAUSE => Msg::Pause { paused: r.bool()? },
             tag::QUALITY => Msg::Quality { level: r.u8()? },
+            tag::CURSOR_INFO => Msg::CursorInfo { in_picture: r.bool()? },
+            tag::CURSOR => {
+                Msg::Cursor { width: r.u16()?, height: r.u16()?, xhot: r.u16()?, yhot: r.u16()?, png: r.bytes()? }
+            }
             // From a newer peer: skip it whole.
             t => {
                 r.rest();

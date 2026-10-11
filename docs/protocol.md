@@ -1,4 +1,4 @@
-# QuickRemote protocol, version 1.0
+# QuickRemote protocol, version 1.2
 
 All integers are little-endian. `str` and `bytes` are a `u32` length followed by
 the bytes (UTF-8 for `str`), at most 16 MiB. `list<T>` is a `u16` count followed
@@ -88,6 +88,25 @@ within a minute from one IP address, the host ignores that address for 60 s.
 | 25 | HostStats | stream u8, bitrate_kbps u32, fps u16, parity_pct u8, profile u8, encoder str, capture_us u32, encode_us u32, dropped_by_backpressure u32 | H→C |
 | 26 | Error | code u16, text str | both |
 | 27 | Bye | — | C→H |
+| 28 | DisplayRequest (1.1) | stream u8, width u16, height u16, refresh u16, scale_pct u16, target u8 (0 virtual, 1 real) | C→H |
+| 29 | DisplayInfo (1.1) | stream u8, kind u8 (0 fixed, 1 own virtual display, 2 KDE, 3 GNOME), width u16, height u16, scale_pct u16, note str | H→C |
+| 30 | Pause (1.1) | paused bool | C→H |
+| 31 | Quality (1.1) | level u8 (0 high, 1 medium, 2 low) | C→H |
+| 32 | CursorInfo (1.2) | in_picture bool | H→C |
+| 33 | Cursor (1.2) | width u16, height u16, xhot u16, yhot u16, png bytes | H→C |
+
+Minor versions add messages; a peer skips a tag it doesn't know (the
+length prefix tells it how much). A host sends a message marked 1.1 or 1.2
+only to a client whose `Hello` carries that minor version or higher.
+
+- 1.1: `DisplayRequest` asks for a size, refresh and scale (percent), on
+  the client's own virtual monitor or the real one; the host answers with
+  `DisplayInfo` once applied (`note` says what could not be met). `Pause`
+  stops video while the client is hidden. `Quality` caps the bit budget.
+- 1.2: `CursorInfo` says, once before the first frame, whether the pointer
+  is drawn into the picture; when it isn't, the host sends the current
+  shape as `Cursor` (a PNG with its hotspot) and again on every change, and
+  the client shows it as its own pointer.
 
 `CodecCap`: codec u8 (1 H.264, 2 H.265, 3 AV1), hw bool, max_width u16,
 max_height u16, chroma444 bool.
@@ -202,3 +221,39 @@ certificate's fingerprint gives `host_id` (`qr-` + base32 of its first 8 bytes,
 grouped 4-4-5). Hole-punch packets start with `QRPUNCH\0` and are dropped by the
 receiver. Relayed packets carry the 16-byte token in front, which the relay
 strips.
+
+## WebSocket transport (`qr-host --ws-listen`)
+
+For browsers that cannot reach the host over UDP (the Perch Remote Desktop
+extension, whose traffic rides Perch's TCP proxy), the host also serves the
+session over a plain WebSocket on a loopback address: `--ws-listen
+127.0.0.1:<port>`. The listener refuses any other address, since this
+transport has no pairing; whatever fronts it (Perch's login) is the guard.
+`GET /status` returns JSON about the running host, `GET /ws` upgrades.
+
+Every WebSocket message is binary. The first byte is the channel:
+
+| Channel | Direction | Payload |
+|---|---|---|
+| 0 control | both | one `Msg` (as on the control stream, without the u32 length) |
+| 1 input | viewer → host | one `InputEvent` |
+| 2 video | host → viewer | stream u8, `FrameMeta` (42 bytes), the access unit (no FEC: TCP loses nothing) |
+| 3 datagram | both | a datagram as on QUIC, kind byte first (audio, microphone, motion, pad) |
+| 4 file | both | id u32, last bool, bytes (the file stream, in chunks; `last` ends it) |
+| 5 seat | both | sub u8: 1 `Seat` (host → viewer: driver bool, scale_pct u16, driver_ratio_pct u16, viewers u16, cursor_in_picture bool), 2 `Claim` (viewer → host: viewer_id str) |
+
+Any number of viewers may connect. They share one session with the host:
+the gateway opens it when the first viewer sends `Hello` and closes it when
+the last one leaves. The first viewer is the **driver**; its
+`DisplayRequest`, `SelectMonitor`, `Quality`, `SetMode` and `Resize` are
+applied, the others' are ignored. Every viewer may send input. A viewer
+that joins later gets the current `HelloAck`, `SessionStart`,
+`StreamStarted`, `DisplayInfo` and `CursorInfo`, then frames from the next
+keyframe. `Claim` makes a viewer the driver; when the driver leaves, the
+longest-connected viewer takes over, unless a viewer claiming with the
+departed driver's `viewer_id` connects within 10 s. `Pause` applies to one
+viewer; the host is paused only when every viewer is. A viewer whose
+WebSocket cannot keep up (more than about 100 ms of video queued) is sent
+nothing until the next keyframe, which the gateway requests at most every
+250 ms. The feedback the host sees is that of the viewer with the largest
+delay in each window.

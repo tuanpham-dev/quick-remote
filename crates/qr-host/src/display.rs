@@ -437,12 +437,20 @@ async fn kde_real(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use qr_proto::Codec;
     use qr_media::probe::{EncoderInfo, Family};
+    use qr_proto::Codec;
     use qr_proto::msg::CodecCap;
 
     fn enc(codec: Codec, max: u32) -> EncoderInfo {
-        EncoderInfo { element: "x", codec, family: Family::X264, hw: true, chroma444: false, max_width: max, max_height: max }
+        EncoderInfo {
+            element: "x",
+            codec,
+            family: Family::X264,
+            hw: true,
+            chroma444: false,
+            max_width: max,
+            max_height: max,
+        }
     }
 
     fn req(width: u16, height: u16, scale_pct: u16) -> Request {

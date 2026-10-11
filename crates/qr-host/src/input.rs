@@ -5,7 +5,7 @@
 //! libinput-based compositor and every game reading evdev picks up.
 
 use std::collections::HashSet;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, bail};
 use qr_proto::InputEvent;
@@ -333,14 +333,28 @@ impl Input {
                 } else {
                     st.held_buttons.remove(&button);
                 }
+                tracing::debug!(button, down, "input: button");
                 inj.button(button, down)
             }
             InputEvent::Abs { stream, x, y } => {
                 let (x, y) = self.place(stream, x, y);
+                // Moves are a trace, except during a drag: a drag that goes
+                // wrong is what a log of the input is read for.
+                if st.held_buttons.is_empty() {
+                    tracing::trace!(x, y, "input: move");
+                } else {
+                    tracing::debug!(x, y, held = ?st.held_buttons, "input: drag");
+                }
                 inj.abs(x, y)
             }
-            InputEvent::Wheel { dx, dy } => inj.wheel(dx as i32, dy as i32),
-            InputEvent::Text { ref text } => inj.text(text),
+            InputEvent::Wheel { dx, dy } => {
+                tracing::debug!(dx, dy, "input: wheel");
+                inj.wheel(dx as i32, dy as i32)
+            }
+            InputEvent::Text { ref text } => {
+                tracing::debug!(chars = text.chars().count(), "input: text");
+                inj.text(text)
+            }
             InputEvent::ReleaseAll => {
                 drop(st);
                 drop(inj);
@@ -454,6 +468,84 @@ pub fn datagram(ctx: &HostCtx, d: &[u8]) {
             }
         }
         _ => {}
+    }
+}
+
+/// `main` for keys, pads and pen; XTest on `x_display` for the pointer,
+/// buttons, wheel and text. On a managed X desktop (a rootful Xwayland on
+/// the virtual display) the compositor's virtual pointer reaches the X
+/// apps for clicks but not for window drags (xfwm4 never moves a window
+/// dragged by its title bar that way), and the Wayland way of typing text
+/// (a throwaway keymap) never reaches them at all; XTest on their own
+/// display does both. `scale` is the display's current scale: injectors
+/// get logical pixels, and X screen pixels are those times the scale
+/// rounded up.
+pub fn with_x_desktop(main: Box<dyn Injector>, x_display: &str, scale: Arc<Mutex<f64>>) -> Box<dyn Injector> {
+    match xtest::XTest::open(x_display) {
+        Ok(x) => Box::new(XDesktopVia { main, x: Box::new(x), scale }),
+        Err(e) => {
+            tracing::warn!(x_display, "pointer and text stay on the compositor's devices: {e:#}");
+            main
+        }
+    }
+}
+
+struct XDesktopVia {
+    main: Box<dyn Injector>,
+    x: Box<dyn Injector>,
+    scale: Arc<Mutex<f64>>,
+}
+
+impl XDesktopVia {
+    /// Logical pixels (what `Input::place` hands injectors: stream pixels
+    /// over the display's scale) to X screen pixels, which are logical
+    /// pixels times the scale rounded up (the rootful Xwayland's buffer).
+    fn factor(&self) -> f64 {
+        let s = *self.scale.lock().expect("lock");
+        if !s.is_finite() || s <= 0.0 {
+            return 1.0;
+        }
+        (s - 1e-6).ceil().max(1.0)
+    }
+}
+
+impl Injector for XDesktopVia {
+    fn key(&mut self, code: u16, down: bool) -> Result<()> {
+        self.main.key(code, down)
+    }
+    fn button(&mut self, button: u8, down: bool) -> Result<()> {
+        self.x.button(button, down)
+    }
+    fn abs(&mut self, x: u16, y: u16) -> Result<()> {
+        let f = self.factor();
+        let sx = ((x as f64 * f).round() as i64).clamp(0, u16::MAX as i64) as u16;
+        let sy = ((y as f64 * f).round() as i64).clamp(0, u16::MAX as i64) as u16;
+        self.x.abs(sx, sy)
+    }
+    fn rel(&mut self, dx: i32, dy: i32) -> Result<()> {
+        let f = self.factor();
+        self.x.rel((dx as f64 * f).round() as i32, (dy as f64 * f).round() as i32)
+    }
+    fn wheel(&mut self, dx: i32, dy: i32) -> Result<()> {
+        self.x.wheel(dx, dy)
+    }
+    fn text(&mut self, text: &str) -> Result<()> {
+        self.x.text(text)
+    }
+    fn pen(&mut self, x: u32, y: u32, pressure: u16, tilt: (i8, i8), flags: u8) -> Result<()> {
+        self.main.pen(x, y, pressure, tilt, flags)
+    }
+    fn pad(&mut self, idx: u8, buttons: u32, axes: [i16; 6]) -> Result<()> {
+        self.main.pad(idx, buttons, axes)
+    }
+    fn pad_detach(&mut self, idx: u8) -> Result<()> {
+        self.main.pad_detach(idx)
+    }
+    fn take_rumble(&mut self) -> Vec<(u8, u16, u16)> {
+        self.main.take_rumble()
+    }
+    fn name(&self) -> &'static str {
+        "xtest+wayland"
     }
 }
 

@@ -3,7 +3,7 @@
 // conformance/vectors.json by test/vectors.test.ts.
 
 export const PROTO_MAJOR = 1;
-export const PROTO_MINOR = 1;
+export const PROTO_MINOR = 2;
 
 export class Writer {
   private buf = new Uint8Array(64);
@@ -107,6 +107,8 @@ export type Msg =
   | { t: "DisplayInfo"; stream: number; kind: number; width: number; height: number; scalePct: number; note: string }
   | { t: "Pause"; paused: boolean }
   | { t: "Quality"; level: number }
+  | { t: "CursorInfo"; inPicture: boolean }
+  | { t: "Cursor"; width: number; height: number; xhot: number; yhot: number; png: Uint8Array }
   | { t: "Unknown"; tag: number };
 
 /** `DisplayInfo.kind`. */
@@ -120,7 +122,7 @@ const TAG: Record<Msg["t"], number> = {
   FrameLost: 9, KeyframeReq: 10, SetMode: 11, MonitorList: 12, SelectMonitor: 13, StreamStarted: 14,
   StreamStop: 15, Resize: 16, Clipboard: 17, FileOffer: 18, FileAccept: 19, FileCancel: 20, FileDone: 21,
   PadAttach: 22, PadDetach: 23, Rumble: 24, HostStats: 25, Error: 26, Bye: 27,
-  DisplayRequest: 28, DisplayInfo: 29, Pause: 30, Quality: 31, Unknown: 0,
+  DisplayRequest: 28, DisplayInfo: 29, Pause: 30, Quality: 31, CursorInfo: 32, Cursor: 33, Unknown: 0,
 };
 
 export function encodeMsg(m: Msg): Uint8Array {
@@ -156,6 +158,8 @@ export function encodeMsg(m: Msg): Uint8Array {
     case "DisplayInfo": w.u8(m.stream).u8(m.kind).u16(m.width).u16(m.height).u16(m.scalePct).str(m.note); break;
     case "Pause": w.bool(m.paused); break;
     case "Quality": w.u8(m.level); break;
+    case "CursorInfo": w.bool(m.inPicture); break;
+    case "Cursor": w.u16(m.width).u16(m.height).u16(m.xhot).u16(m.yhot).bytes(m.png); break;
     case "Unknown": break;
     case "Clipboard": w.u8(m.kind).bytes(m.data); break;
     case "FileOffer": w.u32(m.id).str(m.name).u64(m.size).raw(m.sha256); break;
@@ -236,6 +240,8 @@ export function decodeMsg(b: Uint8Array): Msg {
     case 29: m = { t: "DisplayInfo", stream: r.u8(), kind: r.u8(), width: r.u16(), height: r.u16(), scalePct: r.u16(), note: r.str() }; break;
     case 30: m = { t: "Pause", paused: r.bool() }; break;
     case 31: m = { t: "Quality", level: r.u8() }; break;
+    case 32: m = { t: "CursorInfo", inPicture: r.bool() }; break;
+    case 33: m = { t: "Cursor", width: r.u16(), height: r.u16(), xhot: r.u16(), yhot: r.u16(), png: r.bytes() }; break;
     // From a newer host: skip it whole.
     default: r.rest(); return { t: "Unknown", tag };
   }

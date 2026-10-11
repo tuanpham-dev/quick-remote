@@ -217,10 +217,8 @@ impl MutterSession {
         let mut streams = self.streams.lock().unwrap();
         *streams = fresh;
         self.rd_session.send_replace(rd_session);
-        let s = streams
-            .iter_mut()
-            .find(|s| s.monitor.name == name)
-            .with_context(|| format!("monitor {name} is gone"))?;
+        let s =
+            streams.iter_mut().find(|s| s.monitor.name == name).with_context(|| format!("monitor {name} is gone"))?;
         s.used = true;
         Ok((s.monitor.clone(), s.node))
     }
@@ -276,7 +274,13 @@ impl MutterSession {
         streams.retain(|s| s.virtual_name.as_deref() != Some(name));
         monitor.id = streams.iter().map(|s| s.monitor.id).max().map_or(0, |m| m + 1).min(PENDING_MONITOR - 1);
         let id = monitor.id;
-        tracing::info!(name, connector = monitor.name, width = monitor.width, height = monitor.height, "mutter virtual monitor");
+        tracing::info!(
+            name,
+            connector = monitor.name,
+            width = monitor.width,
+            height = monitor.height,
+            "mutter virtual monitor"
+        );
         streams.push(Stream { monitor, node, path, used: true, virtual_name: Some(name.into()) });
         id
     }
@@ -356,20 +360,32 @@ impl MutterSession {
             let mut scale = *scale;
             if target {
                 if let Some((w, h, hz)) = mode
-                    && let Some(m) = modes.iter().find(|m| {
-                        (m.1 as u32, m.2 as u32) == (w, h) && (hz == 0 || (m.3 - hz as f64).abs() < 1.0)
-                    })
+                    && let Some(m) = modes
+                        .iter()
+                        .find(|m| (m.1 as u32, m.2 as u32) == (w, h) && (hz == 0 || (m.3 - hz as f64).abs() < 1.0))
                 {
                     chosen = m;
                     out.1 = true;
                 }
                 let want = scale_pct as f64 / 100.0;
-                scale = chosen.5.iter().copied().min_by(|a, b| (a - want).abs().total_cmp(&(b - want).abs())).unwrap_or(1.0);
+                scale = chosen
+                    .5
+                    .iter()
+                    .copied()
+                    .min_by(|a, b| (a - want).abs().total_cmp(&(b - want).abs()))
+                    .unwrap_or(1.0);
                 out.0 = (scale * 100.0).round() as u16;
             }
             let (w, _h) = if transform % 2 == 1 { (chosen.2, chosen.1) } else { (chosen.1, chosen.2) };
             let is_primary = if primary { target } else { *was_primary };
-            configs.push((x, 0, scale, *transform, is_primary, vec![(spec.0.clone(), chosen.0.clone(), HashMap::new())]));
+            configs.push((
+                x,
+                0,
+                scale,
+                *transform,
+                is_primary,
+                vec![(spec.0.clone(), chosen.0.clone(), HashMap::new())],
+            ));
             x += (w as f64 / scale).round() as i32;
         }
         let none: HashMap<&str, Value> = HashMap::new();
@@ -396,9 +412,7 @@ impl MutterSession {
                 // so spend them on a left Shift tap and a pixel's wiggle.
                 if session.has_changed().unwrap_or(false) {
                     let path = session.borrow_and_update().clone();
-                    if let Ok(np) =
-                        zbus::Proxy::new(&conn, RD, path, "org.gnome.Mutter.RemoteDesktop.Session").await
-                    {
+                    if let Ok(np) = zbus::Proxy::new(&conn, RD, path, "org.gnome.Mutter.RemoteDesktop.Session").await {
                         let _ = np.call::<_, _, ()>("NotifyKeyboardKeycode", &(42u32, true)).await;
                         let _ = np.call::<_, _, ()>("NotifyKeyboardKeycode", &(42u32, false)).await;
                         let _ = np.call::<_, _, ()>("NotifyPointerMotionRelative", &(1.0f64, 0.0f64)).await;
@@ -436,11 +450,7 @@ impl MutterSession {
             .and_then(|s| crate::wlkeymap::watch(&s))
             .inspect_err(|e| tracing::warn!("the desktop keymap is unknown ({e:#}); typing non-ASCII by code point"))
             .ok();
-        Ok(MutterInput {
-            tx,
-            streams: self.streams.clone(),
-            keymap,
-        })
+        Ok(MutterInput { tx, streams: self.streams.clone(), keymap })
     }
 
     /// The desktop's clipboard through the session's selection API. Same
