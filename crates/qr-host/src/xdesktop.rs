@@ -5,10 +5,19 @@
 //! the display's scale, so a display request or a pixel-ratio change from
 //! the client carries through. `qr-host --source vdisplay --desktop <cmd>`.
 //!
+//! The display gives its whole session a fresh `XDG_CONFIG_HOME` (sway,
+//! PipeWire and the portals read their generated config from it), so the
+//! desktop starts from defaults each time. With `--desktop-user-config` the
+//! desktop gets the user's own config directory back, and so do services
+//! its session bus starts from then on (xfconfd above all).
+//!
 //! Chrome started in this desktop uses Vulkan: Chrome's OpenGL path crashes
 //! its GPU process on rootful Xwayland (WebGL then reports "not
 //! supported"), so a wrapper first on PATH and a menu entry pointing at it
-//! add the flags.
+//! add the flags. The compositor runs on ANGLE's Vulkan device
+//! (VulkanFromANGLE): on a device of its own it imports WebGL's frames
+//! across devices, and RADV hands them over in a layout it misreads, which
+//! scrambles every WebGL canvas into tiles.
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -58,6 +67,15 @@ fn env_of(vd: &VirtualDisplay) -> Vec<(String, String)> {
     vd.env().to_vec()
 }
 
+/// The user's config directory, as XDG defines it: `$XDG_CONFIG_HOME` when
+/// it is an absolute path, else `$HOME/.config`.
+fn user_config_home(xdg_config_home: Option<&str>, home: Option<&str>) -> Option<PathBuf> {
+    match xdg_config_home.filter(|d| d.starts_with('/')) {
+        Some(d) => Some(PathBuf::from(d)),
+        None => home.filter(|h| !h.is_empty()).map(|h| Path::new(h).join(".config")),
+    }
+}
+
 fn run_in(display: &str, env: &[(String, String)], prog: &str, args: &[&str]) -> Result<String> {
     let out = Command::new(prog)
         .args(args)
@@ -76,7 +94,13 @@ fn run_in(display: &str, env: &[(String, String)], prog: &str, args: &[&str]) ->
 }
 
 impl XDesktop {
-    pub fn start(vd: &VirtualDisplay, command: &str, layout: Option<&str>, dpi: u32) -> Result<Self> {
+    pub fn start(
+        vd: &VirtualDisplay,
+        command: &str,
+        layout: Option<&str>,
+        dpi: u32,
+        user_config: bool,
+    ) -> Result<Self> {
         for prog in ["Xwayland", "xrandr"] {
             which(prog).with_context(|| format!("--desktop needs {prog} on PATH"))?;
         }
@@ -84,6 +108,15 @@ impl XDesktop {
         std::fs::create_dir_all(dir.join("bin"))?;
         std::fs::create_dir_all(dir.join("share/applications"))?;
         let mut env = env_of(vd);
+        if user_config {
+            let home = user_config_home(
+                std::env::var("XDG_CONFIG_HOME").ok().as_deref(),
+                std::env::var("HOME").ok().as_deref(),
+            )
+            .context("--desktop-user-config: neither XDG_CONFIG_HOME nor HOME is set")?;
+            env.retain(|(k, _)| k != "XDG_CONFIG_HOME");
+            env.push(("XDG_CONFIG_HOME".into(), home.display().to_string()));
+        }
         let wayland_display = env
             .iter()
             .find(|(k, _)| k == "WAYLAND_DISPLAY")
@@ -135,7 +168,7 @@ impl XDesktop {
         let wrapper = dir.join("bin/google-chrome-stable");
         std::fs::write(
             &wrapper,
-            "#!/bin/sh\nexec /usr/bin/google-chrome-stable --use-angle=vulkan --enable-features=Vulkan \"$@\"\n",
+            "#!/bin/sh\nexec /usr/bin/google-chrome-stable --use-angle=vulkan --enable-features=Vulkan,VulkanFromANGLE,DefaultANGLEVulkan \"$@\"\n",
         )?;
         std::fs::set_permissions(&wrapper, std::os::unix::fs::PermissionsExt::from_mode(0o755))?;
         let _ = std::os::unix::fs::symlink("google-chrome-stable", dir.join("bin/google-chrome"));
@@ -144,6 +177,21 @@ impl XDesktop {
                 dir.join("share/applications/google-chrome.desktop"),
                 desktop.replace("/usr/bin/google-chrome-stable", &wrapper.display().to_string()),
             )?;
+        }
+
+        // Services the bus starts on demand take its activation
+        // environment, not the desktop's: xfconfd, which holds XFCE's
+        // settings, would otherwise read the display's fresh directory. The
+        // portals were started with it already and keep it. Nothing on the
+        // bus has asked for xfconfd yet (the follower starts below).
+        if user_config {
+            let dir = env.iter().find(|(k, _)| k == "XDG_CONFIG_HOME").map(|(_, v)| v.clone()).unwrap_or_default();
+            match run_in(&display, &env, "dbus-update-activation-environment", &["XDG_CONFIG_HOME"]) {
+                Ok(_) => tracing::info!(dir, "managed desktop: the user's config directory"),
+                Err(e) => {
+                    tracing::warn!("--desktop-user-config: {e:#}; XFCE's settings stay in the display's directory")
+                }
+            }
         }
 
         // The desktop itself, on the display's own session bus (the
@@ -334,5 +382,14 @@ mod tests {
         let e = scale_env(2.0);
         assert!(e.contains(&("GDK_SCALE".into(), "2".into())));
         assert!(e.contains(&("GDK_DPI_SCALE".into(), "1.000".into())));
+    }
+
+    #[test]
+    fn user_config_home_follows_xdg() {
+        assert_eq!(user_config_home(Some("/cfg"), Some("/home/u")), Some(PathBuf::from("/cfg")));
+        // A relative XDG_CONFIG_HOME is invalid and ignored, per the spec.
+        assert_eq!(user_config_home(Some("cfg"), Some("/home/u")), Some(PathBuf::from("/home/u/.config")));
+        assert_eq!(user_config_home(None, Some("/home/u")), Some(PathBuf::from("/home/u/.config")));
+        assert_eq!(user_config_home(None, None), None);
     }
 }

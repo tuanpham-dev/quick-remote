@@ -124,6 +124,12 @@ pub struct Args {
     /// Font DPI told to the managed desktop (`--desktop`).
     #[arg(long, default_value_t = 96)]
     dpi: u32,
+    /// Run the managed desktop (`--desktop`) with the user's own config
+    /// directory (`$XDG_CONFIG_HOME`, else `~/.config`) instead of the
+    /// display's fresh one, so its theme, panel and window manager settings
+    /// apply and changes made there are kept.
+    #[arg(long)]
+    desktop_user_config: bool,
     /// Rendezvous server (`host:port`) for access from the internet.
     #[arg(long)]
     rendezvous: Option<String>,
@@ -478,8 +484,14 @@ async fn main() -> Result<()> {
     // drawn into the picture everywhere else.
     let xdesk = match (&vd, &args.desktop) {
         (Some(vd), Some(cmd)) => Some(Mutex::new(
-            xdesktop::XDesktop::start(&vd.lock().expect("lock"), cmd, args.keyboard_layout.as_deref(), args.dpi)
-                .context("starting the managed desktop")?,
+            xdesktop::XDesktop::start(
+                &vd.lock().expect("lock"),
+                cmd,
+                args.keyboard_layout.as_deref(),
+                args.dpi,
+                args.desktop_user_config,
+            )
+            .context("starting the managed desktop")?,
         )),
         _ => None,
     };

@@ -27,7 +27,7 @@ for _ in $(seq 100); do [[ -S /tmp/.X11-unix/X${D#:} ]] && break; sleep 0.1; don
 mkdir -p "$dir/bin" "$dir/share/applications"
 cat >"$dir/bin/google-chrome-stable" <<'EOF'
 #!/bin/sh
-exec /usr/bin/google-chrome-stable --use-angle=vulkan --enable-features=Vulkan "$@"
+exec /usr/bin/google-chrome-stable --use-angle=vulkan --enable-features=Vulkan,VulkanFromANGLE,DefaultANGLEVulkan "$@"
 EOF
 chmod +x "$dir/bin/google-chrome-stable"
 ln -sf google-chrome-stable "$dir/bin/google-chrome"

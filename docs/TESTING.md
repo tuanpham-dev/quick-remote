@@ -70,7 +70,8 @@ Variants worth trying:
   The host runs the desktop in a rootful Xwayland, keeps the X screen and
   XFCE's scale in step with the display, and forwards the pointer's shape
   to 1.2 clients instead of drawing it into the picture. `--dpi` sets the
-  font DPI. Chrome started in it uses Vulkan, which gives WebGL on the GPU.
+  font DPI. `--desktop-user-config` runs the desktop on your own `~/.config`
+  (theme, panel, window manager) instead of a fresh directory each start. Chrome started in it uses Vulkan, which gives WebGL on the GPU.
   (`scripts/xfce-desktop.sh` is the older script form of the same thing.)
 - Hardware H.265 on Intel GPUs (sharper at the same bitrate):
   `sudo ./setup-intel-hevc.sh` installs Intel's full media driver from

@@ -77,6 +77,7 @@ pub mod xdesktop {
             _command: &str,
             _layout: Option<&str>,
             _dpi: u32,
+            _user_config: bool,
         ) -> Result<Self> {
             bail!("the managed desktop needs Linux")
         }
