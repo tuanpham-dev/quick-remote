@@ -149,6 +149,19 @@ fn binary(v: Vec<u8>) -> Message {
 
 /// Whether a viewer with `queued` frame send times (oldest first, host
 /// microseconds) and one more frame at `next_us` has fallen behind.
+/// The decoders offered for the one session every viewer shares. With
+/// `--codec auto` that is H.264, the one codec every browser decodes, so a
+/// viewer joining later (a laptop after a phone with hardware HEVC) gets a
+/// picture. A codec named with `--codec` is kept instead, for viewers that
+/// all decode it (a browser that can't then gets "no common codec"). With
+/// nothing left to keep, the offer goes through whole, so the host's error
+/// names what the browser does decode.
+fn shared_decoders(decoders: &[qr_proto::CodecCap], codec: &str) -> Vec<qr_proto::CodecCap> {
+    let want = if codec == "auto" { qr_proto::Codec::H264.name() } else { codec };
+    let kept: Vec<_> = decoders.iter().filter(|c| c.codec.name() == want).cloned().collect();
+    if kept.is_empty() { decoders.to_vec() } else { kept }
+}
+
 pub fn backlogged(queued: &VecDeque<u64>, next_us: u64) -> bool {
     match queued.front() {
         None => false,
@@ -494,13 +507,9 @@ impl Hub {
                     if i.link.is_none() && !i.connecting {
                         i.connecting = true;
                         i.generation += 1;
-                        // A shared session streams H.264: the one codec every
-                        // browser decodes, so a viewer joining later (a laptop
-                        // after a phone with hardware HEVC) gets a picture.
+                        // The shared session's codec: see shared_decoders.
                         open_with = Some(match &m {
                             Msg::Hello { major, minor, name, os, want_width, want_height, want_refresh, decoders } => {
-                                let h264: Vec<_> =
-                                    decoders.iter().filter(|c| c.codec == qr_proto::Codec::H264).cloned().collect();
                                 Msg::Hello {
                                     major: *major,
                                     minor: *minor,
@@ -509,7 +518,7 @@ impl Hub {
                                     want_width: *want_width,
                                     want_height: *want_height,
                                     want_refresh: *want_refresh,
-                                    decoders: if h264.is_empty() { decoders.clone() } else { h264 },
+                                    decoders: shared_decoders(decoders, &self.ctx.args.codec),
                                 }
                                 .encode()
                             }
@@ -1099,6 +1108,19 @@ async fn serve_viewer(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_decoders_follow_codec() {
+        let cap = |codec| qr_proto::CodecCap { codec, hw: true, max_width: 4096, max_height: 4096, chroma444: false };
+        let all = [cap(qr_proto::Codec::Av1), cap(qr_proto::Codec::H265), cap(qr_proto::Codec::H264)];
+        let codecs = |v: Vec<qr_proto::CodecCap>| v.into_iter().map(|c| c.codec).collect::<Vec<_>>();
+        assert_eq!(codecs(shared_decoders(&all, "auto")), [qr_proto::Codec::H264]);
+        assert_eq!(codecs(shared_decoders(&all, "h265")), [qr_proto::Codec::H265]);
+        assert_eq!(codecs(shared_decoders(&all, "av1")), [qr_proto::Codec::Av1]);
+        // A browser without the named codec: the whole offer, for the error.
+        let h264 = [cap(qr_proto::Codec::H264)];
+        assert_eq!(codecs(shared_decoders(&h264, "h265")), [qr_proto::Codec::H264]);
+    }
 
     #[test]
     fn seat_round_trip() {

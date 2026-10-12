@@ -95,8 +95,10 @@ pub struct Args {
     /// Encoder element (`auto`, or e.g. `vah264lpenc`, `x264enc`).
     #[arg(long, default_value = "auto")]
     encoder: String,
-    /// Codec (`auto`, `h264`, `h265`, `av1`).
-    #[arg(long, default_value = "auto")]
+    /// Codec (`auto`, `h264`, `h265`, `av1`). WebSocket viewers share one
+    /// stream, which `auto` keeps at H.264; a named codec is used for them
+    /// too, and every viewing browser must then decode it.
+    #[arg(long, default_value = "auto", value_parser = ["auto", "h264", "h265", "av1"])]
     codec: String,
     /// No longer used (one rate controller serves every path); accepted so
     /// existing scripts keep working.
